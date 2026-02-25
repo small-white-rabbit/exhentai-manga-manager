@@ -1103,7 +1103,7 @@ function compareItems(a, b, sortKey, ascending = false) {
 // 格式化标签
 const formatTags = (tags) => {
   return Object.entries(tags)
-    .map(([key, values]) => values.map(value => setting.showTranslation ? `${key}:${tagTranslation?.[value]?.name ?? value}` : `${key}:${value}`).join(', '))
+    .map(([key, values]) => values.map(value => setting.showTranslation ? `${tagTranslation?.[key]?.name ?? key}:${tagTranslation?.[key]?.[value]?.name ?? value}` : `${key}:${value}`).join(', '))
     .join(', ')
 }
 

@@ -163,7 +163,7 @@
             >
               <template #item="{element}">
                 <el-tag :color="element.color" effect="dark" closable @close="removeTag(element.id)">
-                  {{element.letter}}:{{resolvedTranslation[element.tag]?.name || element.tag}}
+                  {{element.letter}}:{{resolvedTranslation[element.cat]?.[element.tag]?.name || element.tag}}
                 </el-tag>
               </template>
             </draggable>
@@ -571,12 +571,19 @@ const loadTranslationFromEhTagTranslation = async () => {
   await fetch('https://github.com/EhTagTranslation/Database/releases/latest/download/db.text.json')
   .then(res => res.json())
   .then(res => {
-    const sourceTranslationDatabase = res.data
-    _.forIn(sourceTranslationDatabase, cat => {
-      _.forIn(cat.data, (value, key) => {
-        resultObject[key] = _.pick(value, ['name', 'intro'])
+    const database = Array.isArray(res) ? res : (res.data || [])
+
+    database.forEach(namespaceObj => {
+      const namespace = namespaceObj.namespace
+      resultObject[namespace] = {}
+      if (namespaceObj.frontMatters) {
+        resultObject[namespace].name = namespaceObj.frontMatters.name
+      }
+      _.forIn(namespaceObj.data, (value, key) => {
+        resultObject[namespace][key] = _.pick(value, ['name', 'intro'])
       })
     })
+
     resolvedTranslation.value = resultObject
     ipcRenderer.invoke('update-tag-translation', resultObject)
     localStorage.setItem('translationCache', JSON.stringify(resultObject))
@@ -738,8 +745,8 @@ const formTagAdd = ref({
 const tagListForCollect = computed(() => {
   if (setting.value.showTranslation) {
     return tagListRaw.value.map(({letter, cat, tag, id}) => {
-      const labelHeader = cat === 'group' ? '团队' : resolvedTranslation.value[cat]?.name || cat
-      const labelTail = resolvedTranslation.value[tag]?.name || tag
+      const labelHeader = resolvedTranslation.value[cat]?.name || cat
+      const labelTail = resolvedTranslation.value[cat]?.[tag]?.name || tag
       return {
         label: `${labelHeader}:${labelTail} || ${letter}:"${tag}"$`,
         value: id

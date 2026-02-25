@@ -97,8 +97,8 @@ export const useAppStore = defineStore('appStore', {
         let labelHeader = tagArray[0]
         let labelTail = tagArray[1]
         if (state.setting.showTranslation) {
-          labelHeader = tagArray[0] === 'group' ? '团队' : state.resolvedTranslation[tagArray[0]]?.name || tagArray[0]
-          labelTail = state.resolvedTranslation[tagArray[1]]?.name || tagArray[1]
+          labelHeader = state.resolvedTranslation[tagArray[0]]?.name || tagArray[0]
+          labelTail = state.resolvedTranslation[tagArray[0]]?.[tagArray[1]]?.name || tagArray[1]
         }
         return {
           label: `${labelHeader}:${labelTail}`,
@@ -128,8 +128,8 @@ export const useAppStore = defineStore('appStore', {
     tagListForSelect (state) {
       if (state.setting.showTranslation) {
         return state.tagListRaw.map(({letter, cat, tag}) => {
-          const labelHeader = cat === 'group' ? '团队' : state.resolvedTranslation[cat]?.name || cat
-          const labelTail = state.resolvedTranslation[tag]?.name || tag
+          const labelHeader = state.resolvedTranslation[cat]?.name || cat
+          const labelTail = state.resolvedTranslation[cat]?.[tag]?.name || tag
           return {
             label: `${labelHeader}:${labelTail} || ${letter}:"${tag}"$`,
             value: `${letter}:"${tag}"$`

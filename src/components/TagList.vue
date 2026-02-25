@@ -52,7 +52,7 @@ const groupedItems = ref({})
 // 根据标签类型添加前缀
 const formatTagText = (item) => {
   const displayName = setting.value.showTranslation
-    ? (resolvedTranslation.value[item.name]?.name || item.name)
+    ? (resolvedTranslation.value[item.type]?.[item.name]?.name || item.name)
     : item.name
 
   if (item.type === 'male') {

@@ -39,8 +39,15 @@ const handleSearch = (query) => {
   dialogVisibleGraph.value = false
 }
 
-const resolveTags = (tags) => {
-  if (setting.value.showTranslation) return tags.map(tag => resolvedTranslation.value[tag]?.name || tag)
+const resolveTags = (tags, category) => {
+  if (setting.value.showTranslation) {
+    return tags.map(tag => {
+      if (category) {
+        return resolvedTranslation.value[category]?.[tag]?.name || tag
+      }
+      return tag
+    })
+  }
   return tags
 }
 
@@ -81,7 +88,7 @@ const displayTagGraph = async () => {
         }
       },
       data: {
-        labels: resolveTags(artists.map(p => p[0])),
+        labels: resolveTags(artists.map(p => p[0]), 'artist'),
         datasets: [{
           label: t('c.artist'),
           data: artists.map(p => p[1]),
@@ -133,8 +140,8 @@ const displayTagGraph = async () => {
 
   const maleTags = _(bookInfos.map(book => book.male)).flatten().countBy().toPairs().sortBy(p => -p[1]).slice(0, 24).value()
   const femaleTags = _(bookInfos.map(book => book.female)).flatten().countBy().toPairs().sortBy(p => -p[1]).slice(0, 24).value()
-  let tagData = maleTags.map(p => {p[2] = 'rgba(54, 162, 235, 0.2)'; p[3] = 'rgb(54, 162, 235)'; return p})
-    .concat(femaleTags.map(p => {p[2] = 'rgba(255, 99, 132, 0.2)'; p[3] = 'rgb(255, 99, 132)'; return p}))
+  let tagData = maleTags.map(p => {p[2] = 'rgba(54, 162, 235, 0.2)'; p[3] = 'rgb(54, 162, 235)'; p[4] = 'male'; return p})
+    .concat(femaleTags.map(p => {p[2] = 'rgba(255, 99, 132, 0.2)'; p[3] = 'rgb(255, 99, 132)'; p[4] = 'female'; return p}))
   tagData = _.sortBy(tagData, p => -p[1]).slice(0, 24)
   const chartTagCount = new Chart(
     document.getElementById('graph-tag-count'),
@@ -170,7 +177,9 @@ const displayTagGraph = async () => {
         }
       },
       data: {
-        labels: resolveTags(tagData.map(p => p[0])),
+        labels: setting.value.showTranslation
+          ? tagData.map(p => resolvedTranslation.value[p[4]]?.[p[0]]?.name || p[0])
+          : tagData.map(p => p[0]),
         datasets: [
           {
             label: t('m.tag'),

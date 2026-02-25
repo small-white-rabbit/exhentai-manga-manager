@@ -108,12 +108,12 @@
               <el-descriptions-item :label="$t('m.category')+':'">
                 <el-tag type="info" class="book-tag" @click="$emit('searchFromTag', `cat:${bookDetail.category}`)">{{bookDetail.category}}</el-tag>
               </el-descriptions-item>
-              <el-descriptions-item v-for="(tagArr, key) in bookDetail.tags" :label="key + ':'" :key="key">
+              <el-descriptions-item v-for="(tagArr, key) in bookDetail.tags" :label="resolvedTranslation[key]?.name || key + ':'" :key="key">
                 <el-popover
                   effect="dark"
                   trigger="hover"
-                  :content="resolvedTranslation[tag] ? resolvedTranslation[tag].intro : tag"
-                  :disabled="!resolvedTranslation[tag]?.intro"
+                  :content="resolvedTranslation[key]?.[tag]?.intro || tag"
+                  :disabled="!resolvedTranslation[key]?.[tag]?.intro"
                   placement="top-start"
                   :show-after="500"
                   width="300px"
@@ -124,7 +124,7 @@
                       type="info"
                       class="book-tag"
                       @click="$emit('searchFromTag', tag, key)"
-                    >{{resolvedTranslation[tag] ? resolvedTranslation[tag].name : tag }}</el-tag>
+                    >{{resolvedTranslation[key]?.[tag]?.name || tag }}</el-tag>
                   </template>
                 </el-popover>
               </el-descriptions-item>
@@ -329,7 +329,7 @@ const editTags = () => {
     _.forIn(tempTagGroup, (tagSet, tagCat) => {
       tempTagGroup[tagCat] = [...tagSet].sort().map(tag => ({
         value: tag,
-        label: `${showTranslation ? (resolvedTranslation.value[tag]?.name || tag ) + ' || ' : ''}${tag}`
+        label: `${showTranslation ? (resolvedTranslation.value[tagCat]?.[tag]?.name || tag ) + ' || ' : ''}${tag}`
       }))
     })
     tagGroup.value = tempTagGroup
