@@ -39,7 +39,9 @@ fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
                 let a_trim = a_num_str.trim_start_matches('0');
                 let b_trim = b_num_str.trim_start_matches('0');
 
-                let cmp = a_trim.len().cmp(&b_trim.len())
+                let cmp = a_trim
+                    .len()
+                    .cmp(&b_trim.len())
                     .then_with(|| a_trim.cmp(b_trim))
                     .then_with(|| a_num_str.len().cmp(&b_num_str.len()).reverse());
 
@@ -48,7 +50,9 @@ fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
                 }
             }
             (Some(ac), Some(bc)) => {
-                let cmp = ac.to_ascii_lowercase().cmp(&bc.to_ascii_lowercase())
+                let cmp = ac
+                    .to_ascii_lowercase()
+                    .cmp(&bc.to_ascii_lowercase())
                     .then_with(|| ac.cmp(&bc));
                 if cmp != std::cmp::Ordering::Equal {
                     return cmp;
@@ -144,12 +148,7 @@ impl MangaReaderApp {
         collect_paths(&pattern_webp);
         collect_paths(&pattern_gif);
 
-        paths.sort_by(|a, b| {
-            natural_cmp(
-                a.to_str().unwrap_or(""),
-                b.to_str().unwrap_or(""),
-            )
-        });
+        paths.sort_by(|a, b| natural_cmp(a.to_str().unwrap_or(""), b.to_str().unwrap_or("")));
 
         for path in paths {
             let mut w = 0.0;
@@ -185,9 +184,15 @@ impl MangaReaderApp {
     fn open_folder_dialog(&mut self, ctx: &egui::Context) {
         if let Some(path) = rfd::FileDialog::new().pick_folder() {
             self._temp_dir = None;
-            self.app_title = path.file_name().and_then(|n| n.to_str()).map(|s| s.to_string());
+            self.app_title = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string());
             if let Some(title) = &self.app_title {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("Manga Reader - {}", title)));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
+                    "Manga Reader - {}",
+                    title
+                )));
             }
             self.load_images(path.to_str().unwrap_or(""));
             ctx.request_repaint();
@@ -204,10 +209,16 @@ impl MangaReaderApp {
     }
 
     fn load_archive_path(&mut self, archive_path: &Path, ctx: Option<&egui::Context>) {
-        self.app_title = archive_path.file_name().and_then(|n| n.to_str()).map(|s| s.to_string());
+        self.app_title = archive_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|s| s.to_string());
         if let Some(ctx) = ctx {
             if let Some(title) = &self.app_title {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("Manga Reader - {}", title)));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
+                    "Manga Reader - {}",
+                    title
+                )));
             }
         }
         let ext = archive_path
@@ -318,10 +329,16 @@ impl MangaReaderApp {
     }
 
     fn open_path(&mut self, path: &Path, ctx: Option<&egui::Context>) {
-        self.app_title = path.file_name().and_then(|n| n.to_str()).map(|s| s.to_string());
+        self.app_title = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|s| s.to_string());
         if let Some(ctx) = ctx {
             if let Some(title) = &self.app_title {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("Manga Reader - {}", title)));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
+                    "Manga Reader - {}",
+                    title
+                )));
             }
         }
         if path.is_dir() {
@@ -526,7 +543,9 @@ impl eframe::App for MangaReaderApp {
                         self._temp_dir = None;
                         self.current_page = 0;
                         self.app_title = None;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Title("Manga Reader".to_string()));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Title(
+                            "Manga Reader".to_string(),
+                        ));
                     }
 
                     if self.loading {
@@ -678,7 +697,8 @@ impl eframe::App for MangaReaderApp {
                                     let painter = ui.painter();
                                     let rect = img_response.rect;
 
-                                    let text = format!("{}/{}", self.current_page + 1, self.images.len());
+                                    let text =
+                                        format!("{}/{}", self.current_page + 1, self.images.len());
                                     let font_id = egui::FontId::proportional(16.0);
                                     let text_color = egui::Color32::WHITE;
                                     let bg_color = egui::Color32::from_black_alpha(160);
@@ -706,8 +726,13 @@ impl eframe::App for MangaReaderApp {
 
                                 if self.current_page + 1 < self.images.len() {
                                     let next_image_data = &self.images[self.current_page + 1];
-                                    let next_uri = format!("file://{}", next_image_data.path.to_string_lossy());
-                                    let _ = ui.ctx().try_load_image(&next_uri, egui::load::SizeHint::default());
+                                    let next_uri = format!(
+                                        "file://{}",
+                                        next_image_data.path.to_string_lossy()
+                                    );
+                                    let _ = ui
+                                        .ctx()
+                                        .try_load_image(&next_uri, egui::load::SizeHint::default());
                                 }
                             }
                         });
@@ -734,7 +759,12 @@ fn main() -> eframe::Result<()> {
             .with_app_id("manga_reader_app")
             .with_inner_size([1000.0, 700.0])
             .with_min_inner_size([400.0, 300.0])
-            .with_title(app.app_title.as_ref().map(|t| format!("Manga Reader - {}", t)).unwrap_or_else(|| "Manga Reader".to_string())),
+            .with_title(
+                app.app_title
+                    .as_ref()
+                    .map(|t| format!("Manga Reader - {}", t))
+                    .unwrap_or_else(|| "Manga Reader".to_string()),
+            ),
         ..Default::default()
     };
 
