@@ -608,15 +608,14 @@ impl eframe::App for MangaReaderApp {
                                     }
 
                                     // Fit to screen height ideally for single page
-                                    let screen_height = ctx.screen_rect().height() * 0.9;
                                     let scale_w = display_width / w;
-                                    let scale_h = screen_height / h;
+                                    let scale_h = available_height / h;
                                     // But let's allow it to be larger if the user wants, or fit entirely
                                     let scale = scale_w.min(scale_h).min(1.0);
                                     let final_w = w * scale;
                                     let final_h = h * scale;
 
-                                    if final_h < available_height {
+                                    if final_h < available_height - 1.0 {
                                         let padding = (available_height - final_h) / 2.0;
                                         ui.add_space(padding);
                                     }
@@ -644,8 +643,7 @@ impl eframe::App for MangaReaderApp {
                                     let painter = ui.painter();
                                     let rect = img_response.rect;
 
-                                    let text =
-                                        format!("{}/{}", self.current_page + 1, self.images.len());
+                                    let text = format!("{}/{}", self.current_page + 1, self.images.len());
                                     let font_id = egui::FontId::proportional(16.0);
                                     let text_color = egui::Color32::WHITE;
                                     let bg_color = egui::Color32::from_black_alpha(160);
@@ -666,7 +664,9 @@ impl eframe::App for MangaReaderApp {
                                     painter.rect_filled(bg_rect, 4.0, bg_color);
                                     painter.galley(bg_rect.min + margin, galley, text_color);
 
-                                    ui.add_space(4.0);
+                                    if final_h < available_height - 1.0 {
+                                        ui.add_space(4.0);
+                                    }
                                 });
                             }
                         });
