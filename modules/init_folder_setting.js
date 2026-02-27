@@ -37,14 +37,19 @@ const preparePath = () => {
 
 const prepareSetting = () => {
   let setting
+  const _mange_reader = `"${path.join(getRootPath(), 'resources/extraResources/manga_reader.exe')}"`
   try {
     setting = JSON.parse(fs.readFileSync(path.join(STORE_PATH, 'setting.json'), { encoding: 'utf-8' }))
+    if (setting.imageExplorer === '"C:\\Windows\\explorer.exe"') {
+      setting.imageExplorer = _mange_reader
+      fs.writeFileSync(path.join(STORE_PATH, 'setting.json'), JSON.stringify(setting, null, '  '), { encoding: 'utf-8' })
+    }
   } catch {
     setting = {
       proxy: undefined,
       library: app.getPath('downloads'),
       metadataPath: undefined,
-      imageExplorer: '\"C:\\Windows\\explorer.exe\"',
+      imageExplorer: _mange_reader,
       pageSize: 42,
       loadOnStart: false,
       igneous: '',
