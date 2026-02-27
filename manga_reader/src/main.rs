@@ -4,7 +4,12 @@ use eframe::egui;
 use std::env;
 use std::fs;
 use std::io;
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+const ARCHIVE_IN_MEMORY_LIMIT_BYTES: usize = 1024 * 1024 * 1024;
+const ARCHIVE_ESTIMATED_DECODED_LIMIT_BYTES: usize = 8192 * 1024 * 1024;
 
 fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     let mut a_iter = a.chars().peekable();
@@ -90,6 +95,8 @@ struct MangaReaderApp {
     current_page: usize,
     app_title: Option<String>,
     scroll_accumulator: f32,
+    load_receiver: Option<std::sync::mpsc::Receiver<LoadResultData>>,
+    pending_load_path: Option<PathBuf>,
 }
 
 impl Default for MangaReaderApp {
@@ -105,18 +112,392 @@ impl Default for MangaReaderApp {
             current_page: 0,
             app_title: None,
             scroll_accumulator: 0.0,
+            load_receiver: None,
+            pending_load_path: None,
         }
     }
 }
 
+enum ImageSource {
+    File(PathBuf),
+    Memory { uri: String, bytes: Arc<[u8]> },
+}
+
 struct ImageData {
-    path: PathBuf,
+    source: ImageSource,
     width: f32,
     height: f32,
 }
 
+struct LoadResultData {
+    images: Vec<ImageData>,
+    image_width: f32,
+    image_height: f32,
+    temp_dir: Option<tempfile::TempDir>,
+}
+
+fn do_load_images(folder_path: &str) -> (Vec<ImageData>, f32, f32) {
+    let mut paths: Vec<PathBuf> = Vec::new();
+    let pattern_jpg = format!("{}/**/*.jpg", glob::Pattern::escape(folder_path));
+    let pattern_png = format!("{}/**/*.png", glob::Pattern::escape(folder_path));
+    let pattern_jpeg = format!("{}/**/*.jpeg", glob::Pattern::escape(folder_path));
+    let pattern_webp = format!("{}/**/*.webp", glob::Pattern::escape(folder_path));
+    let pattern_gif = format!("{}/**/*.gif", glob::Pattern::escape(folder_path));
+
+    let mut collect_paths = |pattern: &str| {
+        let options = glob::MatchOptions {
+            case_sensitive: false,
+            require_literal_separator: false,
+            require_literal_leading_dot: false,
+        };
+        if let Ok(glob_paths) = glob::glob_with(pattern, options) {
+            paths.extend(glob_paths.filter_map(Result::ok));
+        }
+    };
+
+    collect_paths(&pattern_jpg);
+    collect_paths(&pattern_png);
+    collect_paths(&pattern_jpeg);
+    collect_paths(&pattern_webp);
+    collect_paths(&pattern_gif);
+
+    paths.sort_by(|a, b| natural_cmp(a.to_str().unwrap_or(""), b.to_str().unwrap_or("")));
+
+    let mut images = Vec::new();
+    let mut image_width = 0.0;
+    let mut image_height = 0.0;
+
+    for path in paths {
+        let mut w = 0.0;
+        let mut h = 0.0;
+        if let Ok(dimensions) = image::image_dimensions(&path) {
+            w = dimensions.0 as f32;
+            h = dimensions.1 as f32;
+        }
+
+        if image_width == 0.0 && image_height == 0.0 && w > 0.0 {
+            image_width = w;
+            image_height = h;
+        }
+
+        images.push(ImageData {
+            source: ImageSource::File(path),
+            width: w,
+            height: h,
+        });
+    }
+
+    (images, image_width, image_height)
+}
+
+fn do_extract_archive(archive_path: &Path, ext: &str) -> Option<tempfile::TempDir> {
+    if let Ok(temp_dir) = tempfile::Builder::new().prefix("manga_reader").tempdir() {
+        let mut success = false;
+
+        if ext == "zip" || ext == "cbz" {
+            if let Ok(file) = fs::File::open(archive_path) {
+                if let Ok(mut archive) = zip::ZipArchive::new(file) {
+                    for i in 0..archive.len() {
+                        if let Ok(mut file) = archive.by_index(i) {
+                            let outpath = match file.enclosed_name() {
+                                Some(path) => path.to_owned(),
+                                None => continue,
+                            };
+
+                            if MangaReaderApp::is_supported_image(&outpath) {
+                                let outpath = temp_dir.path().join(outpath);
+                                if let Some(p) = outpath.parent() {
+                                    if !p.exists() {
+                                        let _ = fs::create_dir_all(&p);
+                                    }
+                                }
+                                if let Ok(mut outfile) = fs::File::create(&outpath) {
+                                    let _ = io::copy(&mut file, &mut outfile);
+                                }
+                            }
+                        }
+                    }
+                    success = true;
+                }
+            }
+        } else if ext == "7z" || ext == "cb7" {
+            if sevenz_rust::decompress_file_with_extract_fn(
+                archive_path,
+                temp_dir.path(),
+                |entry, reader, dest| {
+                    if !entry.is_directory() {
+                        let path = Path::new(entry.name());
+                        if MangaReaderApp::is_supported_image(path) {
+                            if let Some(p) = dest.parent() {
+                                if !p.exists() {
+                                    fs::create_dir_all(&p).unwrap_or(());
+                                }
+                            }
+                            if let Ok(mut outfile) = fs::File::create(dest) {
+                                let _ = io::copy(reader, &mut outfile);
+                            } else {
+                                let _ = io::copy(reader, &mut io::sink());
+                            }
+                        } else {
+                            let _ = io::copy(reader, &mut io::sink());
+                        }
+                    }
+                    Ok(true)
+                },
+            )
+            .is_ok()
+            {
+                success = true;
+            }
+        } else if ext == "rar" || ext == "cbr" {
+            let archive_path_str = archive_path.to_string_lossy().to_string();
+            if let Ok(archive) = unrar::Archive::new(&archive_path_str).open_for_processing() {
+                let mut current_archive = archive;
+                loop {
+                    match current_archive.read_header() {
+                        Ok(Some(header)) => {
+                            let filename = header.entry().filename.to_string_lossy().into_owned();
+                            let is_file = header.entry().is_file();
+                            if is_file && MangaReaderApp::is_supported_image(Path::new(&filename)) {
+                                let outpath = temp_dir.path().join(&filename);
+                                if let Some(p) = outpath.parent() {
+                                    if !p.exists() {
+                                        fs::create_dir_all(&p).unwrap_or(());
+                                    }
+                                }
+                                match header.extract_to(&outpath) {
+                                    Ok(next) => current_archive = next,
+                                    Err(_) => break,
+                                }
+                            } else {
+                                match header.skip() {
+                                    Ok(next) => current_archive = next,
+                                    Err(_) => break,
+                                }
+                            }
+                        }
+                        _ => break,
+                    }
+                }
+                success = true;
+            }
+        }
+
+        if success {
+            return Some(temp_dir);
+        }
+    }
+    None
+}
+
+fn do_load_archive(archive_path: &Path) -> Option<LoadResultData> {
+    let ext = archive_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    let mut memory_images: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut total_encoded_bytes = 0usize;
+    let mut total_estimated_decoded_bytes = 0usize;
+    let mut memory_limit_exceeded = false;
+
+    if ext == "zip" || ext == "cbz" {
+        if let Ok(file) = std::fs::File::open(archive_path) {
+            if let Ok(mut archive) = zip::ZipArchive::new(file) {
+                for i in 0..archive.len() {
+                    if let Ok(mut file) = archive.by_index(i) {
+                        if file.is_dir() {
+                            continue;
+                        }
+
+                        let image_name = match file.enclosed_name() {
+                            Some(path) if MangaReaderApp::is_supported_image(&path) => {
+                                path.to_string_lossy().to_string()
+                            }
+                            _ => continue,
+                        };
+
+                        let mut bytes = Vec::new();
+                        if file.read_to_end(&mut bytes).is_ok() {
+                            total_encoded_bytes = total_encoded_bytes.saturating_add(bytes.len());
+                            total_estimated_decoded_bytes = total_estimated_decoded_bytes
+                                .saturating_add(
+                                    MangaReaderApp::estimated_decoded_bytes_from_image_bytes(
+                                        &bytes,
+                                    ),
+                                );
+                            if total_encoded_bytes > ARCHIVE_IN_MEMORY_LIMIT_BYTES
+                                || total_estimated_decoded_bytes
+                                    > ARCHIVE_ESTIMATED_DECODED_LIMIT_BYTES
+                            {
+                                memory_limit_exceeded = true;
+                                break;
+                            }
+                            memory_images.push((image_name, bytes));
+                        }
+                    }
+                }
+            }
+        }
+    } else if ext == "7z" || ext == "cb7" {
+        let _ = sevenz_rust::decompress_file_with_extract_fn(
+            archive_path,
+            Path::new("."),
+            |entry, reader, _dest| {
+                if entry.is_directory() {
+                    return Ok(true);
+                }
+
+                let image_name = entry.name().replace('\\', "/");
+                if MangaReaderApp::is_supported_image(Path::new(&image_name)) {
+                    let mut bytes = Vec::new();
+                    if reader.read_to_end(&mut bytes).is_ok() {
+                        total_encoded_bytes = total_encoded_bytes.saturating_add(bytes.len());
+                        total_estimated_decoded_bytes = total_estimated_decoded_bytes
+                            .saturating_add(
+                                MangaReaderApp::estimated_decoded_bytes_from_image_bytes(&bytes),
+                            );
+                        if total_encoded_bytes > ARCHIVE_IN_MEMORY_LIMIT_BYTES
+                            || total_estimated_decoded_bytes > ARCHIVE_ESTIMATED_DECODED_LIMIT_BYTES
+                        {
+                            memory_limit_exceeded = true;
+                            return Ok(true);
+                        }
+                        memory_images.push((image_name, bytes));
+                    }
+                } else {
+                    let _ = io::copy(reader, &mut io::sink());
+                }
+                Ok(true)
+            },
+        );
+    } else if ext == "rar" || ext == "cbr" {
+        let archive_path_str = archive_path.to_string_lossy().to_string();
+        if let Ok(archive) = unrar::Archive::new(&archive_path_str).open_for_processing() {
+            let mut current_archive = archive;
+            loop {
+                match current_archive.read_header() {
+                    Ok(Some(header)) => {
+                        let filename = header.entry().filename.to_string_lossy().into_owned();
+                        let is_file = header.entry().is_file();
+
+                        if is_file && MangaReaderApp::is_supported_image(Path::new(&filename)) {
+                            match header.read() {
+                                Ok((bytes, next)) => {
+                                    total_encoded_bytes =
+                                        total_encoded_bytes.saturating_add(bytes.len());
+                                    total_estimated_decoded_bytes = total_estimated_decoded_bytes
+                                        .saturating_add(
+                                        MangaReaderApp::estimated_decoded_bytes_from_image_bytes(
+                                            &bytes,
+                                        ),
+                                    );
+                                    if total_encoded_bytes > ARCHIVE_IN_MEMORY_LIMIT_BYTES
+                                        || total_estimated_decoded_bytes
+                                            > ARCHIVE_ESTIMATED_DECODED_LIMIT_BYTES
+                                    {
+                                        memory_limit_exceeded = true;
+                                        break;
+                                    }
+                                    memory_images.push((filename, bytes));
+                                    current_archive = next;
+                                }
+                                Err(_) => break,
+                            }
+                        } else {
+                            match header.skip() {
+                                Ok(next) => current_archive = next,
+                                Err(_) => break,
+                            }
+                        }
+                    }
+                    _ => break,
+                }
+            }
+        }
+    }
+
+    if memory_limit_exceeded {
+        if let Some(temp_dir) = do_extract_archive(archive_path, &ext) {
+            let temp_path = temp_dir.path().to_str().unwrap_or("").to_string();
+            let (images, image_width, image_height) = do_load_images(&temp_path);
+            return Some(LoadResultData {
+                images,
+                image_width,
+                image_height,
+                temp_dir: Some(temp_dir),
+            });
+        }
+        return None;
+    }
+
+    memory_images.sort_by(|a, b| natural_cmp(&a.0, &b.0));
+
+    let mut images = Vec::new();
+    let mut image_width = 0.0;
+    let mut image_height = 0.0;
+
+    for (index, (name, bytes)) in memory_images.into_iter().enumerate() {
+        let (w, h) = MangaReaderApp::image_dimensions_from_bytes(&bytes);
+        if image_width == 0.0 && image_height == 0.0 && w > 0.0 {
+            image_width = w;
+            image_height = h;
+        }
+
+        let archive_name = archive_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("archive");
+        let uri = format!(
+            "bytes://{}/{}-{}",
+            archive_name,
+            index,
+            name.replace('\\', "/")
+        );
+
+        images.push(ImageData {
+            source: ImageSource::Memory {
+                uri,
+                bytes: Arc::from(bytes),
+            },
+            width: w,
+            height: h,
+        });
+    }
+
+    Some(LoadResultData {
+        images,
+        image_width,
+        image_height,
+        temp_dir: None,
+    })
+}
+
 impl MangaReaderApp {
-    fn load_images(&mut self, folder_path: &str) {
+    fn clear_loaded_images(&mut self, ctx: Option<&egui::Context>) {
+        if let Some(ctx) = ctx {
+            ctx.forget_all_images();
+        }
+        self.images.clear();
+        self.folder_path = None;
+        self.image_width = 0.0;
+        self.image_height = 0.0;
+        self.current_page = 0;
+        self._temp_dir = None;
+        self.load_receiver = None;
+    }
+
+    fn estimated_decoded_bytes_from_image_bytes(bytes: &[u8]) -> usize {
+        let (w, h) = Self::image_dimensions_from_bytes(bytes);
+        if w > 0.0 && h > 0.0 {
+            (w as usize).saturating_mul(h as usize).saturating_mul(4)
+        } else {
+            0
+        }
+    }
+
+    fn load_images(&mut self, folder_path: &str, ctx: Option<&egui::Context>) {
         self.images.clear();
         self.image_width = 0.0;
         self.image_height = 0.0;
@@ -124,66 +505,29 @@ impl MangaReaderApp {
         self.current_page = 0;
         self.folder_path = Some(folder_path.to_string());
 
-        let mut paths: Vec<PathBuf> = Vec::new();
-        let pattern_jpg = format!("{}/**/*.jpg", glob::Pattern::escape(folder_path));
-        let pattern_png = format!("{}/**/*.png", glob::Pattern::escape(folder_path));
-        let pattern_jpeg = format!("{}/**/*.jpeg", glob::Pattern::escape(folder_path));
-        let pattern_webp = format!("{}/**/*.webp", glob::Pattern::escape(folder_path));
-        let pattern_gif = format!("{}/**/*.gif", glob::Pattern::escape(folder_path));
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.load_receiver = Some(rx);
 
-        let mut collect_paths = |pattern: &str| {
-            let options = glob::MatchOptions {
-                case_sensitive: false,
-                require_literal_separator: false,
-                require_literal_leading_dot: false,
-            };
-            if let Ok(glob_paths) = glob::glob_with(pattern, options) {
-                paths.extend(glob_paths.filter_map(Result::ok));
-            }
-        };
+        let folder_path_clone = folder_path.to_string();
+        let ctx_clone = ctx.cloned();
 
-        collect_paths(&pattern_jpg);
-        collect_paths(&pattern_png);
-        collect_paths(&pattern_jpeg);
-        collect_paths(&pattern_webp);
-        collect_paths(&pattern_gif);
-
-        paths.sort_by(|a, b| natural_cmp(a.to_str().unwrap_or(""), b.to_str().unwrap_or("")));
-
-        for path in paths {
-            let mut w = 0.0;
-            let mut h = 0.0;
-            if let Ok(dimensions) = image::image_dimensions(&path) {
-                w = dimensions.0 as f32;
-                h = dimensions.1 as f32;
-            } else if let Ok(img) = image::open(&path) {
-                w = img.width() as f32;
-                h = img.height() as f32;
-            }
-
-            if self.image_width == 0.0 && self.image_height == 0.0 && w > 0.0 {
-                self.image_width = w;
-                self.image_height = h;
-            }
-            self.images.push(ImageData {
-                path,
-                width: w,
-                height: h,
+        std::thread::spawn(move || {
+            let (images, image_width, image_height) = do_load_images(&folder_path_clone);
+            let _ = tx.send(LoadResultData {
+                images,
+                image_width,
+                image_height,
+                temp_dir: None,
             });
-        }
-
-        if self.images.is_empty() {
-            self.loading = false;
-        }
-    }
-
-    fn load_textures(&mut self, _ctx: &egui::Context) {
-        self.loading = false;
+            if let Some(ctx) = ctx_clone {
+                ctx.request_repaint();
+            }
+        });
     }
 
     fn open_folder_dialog(&mut self, ctx: &egui::Context) {
         if let Some(path) = rfd::FileDialog::new().pick_folder() {
-            self._temp_dir = None;
+            self.clear_loaded_images(Some(ctx));
             self.app_title = path
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -194,7 +538,7 @@ impl MangaReaderApp {
                     title
                 )));
             }
-            self.load_images(path.to_str().unwrap_or(""));
+            self.load_images(path.to_str().unwrap_or(""), Some(ctx));
             ctx.request_repaint();
         }
     }
@@ -206,6 +550,29 @@ impl MangaReaderApp {
             .unwrap_or("")
             .to_lowercase();
         ext == "jpg" || ext == "jpeg" || ext == "png" || ext == "webp" || ext == "gif"
+    }
+
+    fn image_dimensions_from_bytes(bytes: &[u8]) -> (f32, f32) {
+        if let Ok(reader) =
+            image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()
+        {
+            if let Ok(dimensions) = reader.into_dimensions() {
+                return (dimensions.0 as f32, dimensions.1 as f32);
+            }
+        }
+        (0.0, 0.0)
+    }
+
+    fn archive_image_widget(image_data: &ImageData) -> egui::Image<'static> {
+        match &image_data.source {
+            ImageSource::File(path) => {
+                let uri = format!("file://{}", path.to_string_lossy());
+                egui::Image::new(uri)
+            }
+            ImageSource::Memory { uri, bytes } => {
+                egui::Image::from_bytes(uri.clone(), bytes.clone())
+            }
+        }
     }
 
     fn load_archive_path(&mut self, archive_path: &Path, ctx: Option<&egui::Context>) {
@@ -221,111 +588,32 @@ impl MangaReaderApp {
                 )));
             }
         }
-        let ext = archive_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
 
-        if let Ok(temp_dir) = tempfile::Builder::new().prefix("manga_reader").tempdir() {
-            let mut success = false;
+        self.clear_loaded_images(ctx);
+        self.loading = true;
+        self.folder_path = Some(archive_path.to_string_lossy().to_string());
 
-            if ext == "zip" || ext == "cbz" {
-                if let Ok(file) = fs::File::open(archive_path) {
-                    if let Ok(mut archive) = zip::ZipArchive::new(file) {
-                        for i in 0..archive.len() {
-                            if let Ok(mut file) = archive.by_index(i) {
-                                let outpath = match file.enclosed_name() {
-                                    Some(path) => path.to_owned(),
-                                    None => continue,
-                                };
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.load_receiver = Some(rx);
 
-                                if Self::is_supported_image(&outpath) {
-                                    let outpath = temp_dir.path().join(outpath);
-                                    if let Some(p) = outpath.parent() {
-                                        if !p.exists() {
-                                            let _ = fs::create_dir_all(&p);
-                                        }
-                                    }
-                                    if let Ok(mut outfile) = fs::File::create(&outpath) {
-                                        let _ = io::copy(&mut file, &mut outfile);
-                                    }
-                                }
-                            }
-                        }
-                        success = true;
-                    }
-                }
-            } else if ext == "7z" || ext == "cb7" {
-                if sevenz_rust::decompress_file_with_extract_fn(
-                    archive_path,
-                    temp_dir.path(),
-                    |entry, reader, dest| {
-                        if !entry.is_directory() {
-                            let path = Path::new(entry.name());
-                            if Self::is_supported_image(path) {
-                                if let Some(p) = dest.parent() {
-                                    if !p.exists() {
-                                        fs::create_dir_all(&p).unwrap_or(());
-                                    }
-                                }
-                                if let Ok(mut outfile) = fs::File::create(dest) {
-                                    let _ = io::copy(reader, &mut outfile);
-                                } else {
-                                    let _ = io::copy(reader, &mut io::sink());
-                                }
-                            } else {
-                                let _ = io::copy(reader, &mut io::sink());
-                            }
-                        }
-                        Ok(true)
-                    },
-                )
-                .is_ok()
-                {
-                    success = true;
-                }
-            } else if ext == "rar" || ext == "cbr" {
-                let archive_path_str = archive_path.to_string_lossy().to_string();
-                if let Ok(archive) = unrar::Archive::new(&archive_path_str).open_for_processing() {
-                    let mut current_archive = archive;
-                    loop {
-                        match current_archive.read_header() {
-                            Ok(Some(header)) => {
-                                let filename =
-                                    header.entry().filename.to_string_lossy().into_owned();
-                                let is_file = header.entry().is_file();
-                                if is_file && Self::is_supported_image(Path::new(&filename)) {
-                                    let outpath = temp_dir.path().join(&filename);
-                                    if let Some(p) = outpath.parent() {
-                                        if !p.exists() {
-                                            fs::create_dir_all(&p).unwrap_or(());
-                                        }
-                                    }
-                                    match header.extract_to(&outpath) {
-                                        Ok(next) => current_archive = next,
-                                        Err(_) => break,
-                                    }
-                                } else {
-                                    match header.skip() {
-                                        Ok(next) => current_archive = next,
-                                        Err(_) => break,
-                                    }
-                                }
-                            }
-                            _ => break,
-                        }
-                    }
-                    success = true;
-                }
+        let archive_path_clone = archive_path.to_path_buf();
+        let ctx_clone = ctx.cloned();
+
+        std::thread::spawn(move || {
+            if let Some(data) = do_load_archive(&archive_path_clone) {
+                let _ = tx.send(data);
+            } else {
+                let _ = tx.send(LoadResultData {
+                    images: Vec::new(),
+                    image_width: 0.0,
+                    image_height: 0.0,
+                    temp_dir: None,
+                });
             }
-
-            if success {
-                let temp_path = temp_dir.path().to_str().unwrap_or("").to_string();
-                self._temp_dir = Some(temp_dir);
-                self.load_images(&temp_path);
+            if let Some(ctx) = ctx_clone {
+                ctx.request_repaint();
             }
-        }
+        });
     }
 
     fn open_path(&mut self, path: &Path, ctx: Option<&egui::Context>) {
@@ -342,8 +630,8 @@ impl MangaReaderApp {
             }
         }
         if path.is_dir() {
-            self._temp_dir = None;
-            self.load_images(path.to_str().unwrap_or(""));
+            self.clear_loaded_images(ctx);
+            self.load_images(path.to_str().unwrap_or(""), ctx);
         } else if path.is_file() {
             let ext = path
                 .extension()
@@ -379,7 +667,22 @@ impl eframe::App for MangaReaderApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.load_textures(ctx);
+        if let Some(path) = self.pending_load_path.take() {
+            self.open_path(&path, Some(ctx));
+        }
+
+        if let Some(rx) = &self.load_receiver {
+            if let Ok(data) = rx.try_recv() {
+                self.images = data.images;
+                self.image_width = data.image_width;
+                self.image_height = data.image_height;
+                if data.temp_dir.is_some() {
+                    self._temp_dir = data.temp_dir;
+                }
+                self.loading = false;
+                self.load_receiver = None;
+            }
+        }
 
         let mut scroll_delta = 0.0;
         let mut requests_repaint = false;
@@ -421,20 +724,12 @@ impl eframe::App for MangaReaderApp {
                     prev_page = true;
                     requests_repaint = true;
                 }
-                if i.key_down(egui::Key::W) || i.key_down(egui::Key::ArrowUp) {
-                    scroll_delta += 1500.0 * dt;
-                    requests_repaint = true;
-                }
-                if i.key_down(egui::Key::S) || i.key_down(egui::Key::ArrowDown) {
-                    scroll_delta -= 1500.0 * dt;
-                    requests_repaint = true;
-                }
 
                 let scroll_y = i.smooth_scroll_delta.y;
                 if scroll_y != 0.0 {
                     self.scroll_accumulator += scroll_y;
                 } else {
-                    self.scroll_accumulator *= 0.8;
+                    self.scroll_accumulator *= 0.8_f32.powf(dt * 60.0);
                 }
 
                 if self.scroll_accumulator > 40.0 {
@@ -536,12 +831,7 @@ impl eframe::App for MangaReaderApp {
 
                     let close_btn = ui.button("Close");
                     if close_btn.clicked() {
-                        self.images.clear();
-                        self.folder_path = None;
-                        self.image_width = 0.0;
-                        self.image_height = 0.0;
-                        self._temp_dir = None;
-                        self.current_page = 0;
+                        self.clear_loaded_images(Some(ctx));
                         self.app_title = None;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Title(
                             "Manga Reader".to_string(),
@@ -574,7 +864,6 @@ impl eframe::App for MangaReaderApp {
                             let total_images = self.images.len();
 
                             for (index, image_data) in self.images.iter().enumerate() {
-                                let uri = format!("file://{}", image_data.path.to_string_lossy());
                                 ui.vertical_centered(|ui| {
                                     let mut w = image_data.width;
                                     let mut h = image_data.height;
@@ -596,7 +885,7 @@ impl eframe::App for MangaReaderApp {
                                     let final_h = h * scale;
 
                                     let img_response = ui.add(
-                                        egui::Image::new(&uri)
+                                        Self::archive_image_widget(image_data)
                                             .fit_to_exact_size(egui::vec2(final_w, final_h)),
                                     );
 
@@ -641,7 +930,6 @@ impl eframe::App for MangaReaderApp {
 
                             if self.current_page < self.images.len() {
                                 let image_data = &self.images[self.current_page];
-                                let uri = format!("file://{}", image_data.path.to_string_lossy());
 
                                 ui.vertical_centered(|ui| {
                                     let display_width = ui.available_width();
@@ -669,7 +957,7 @@ impl eframe::App for MangaReaderApp {
                                     }
 
                                     let img_response = ui.add(
-                                        egui::Image::new(&uri)
+                                        Self::archive_image_widget(image_data)
                                             .fit_to_exact_size(egui::vec2(final_w, final_h)),
                                     );
 
@@ -724,15 +1012,14 @@ impl eframe::App for MangaReaderApp {
                                     }
                                 });
 
-                                if self.current_page + 1 < self.images.len() {
-                                    let next_image_data = &self.images[self.current_page + 1];
-                                    let next_uri = format!(
-                                        "file://{}",
-                                        next_image_data.path.to_string_lossy()
-                                    );
-                                    let _ = ui
-                                        .ctx()
-                                        .try_load_image(&next_uri, egui::load::SizeHint::default());
+                                for offset in 1..=3 {
+                                    if self.current_page + offset < self.images.len() {
+                                        let pre_image_data =
+                                            &self.images[self.current_page + offset];
+                                        let pre_image = Self::archive_image_widget(pre_image_data);
+                                        let _ =
+                                            pre_image.load_for_size(ui.ctx(), ui.available_size());
+                                    }
                                 }
                             }
                         });
@@ -751,7 +1038,7 @@ fn main() -> eframe::Result<()> {
     let mut app = MangaReaderApp::default();
 
     if let Some(path_str) = args.get(1) {
-        app.open_path(Path::new(path_str), None);
+        app.pending_load_path = Some(PathBuf::from(path_str));
     }
 
     let options = eframe::NativeOptions {
