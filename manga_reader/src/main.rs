@@ -85,6 +85,7 @@ struct MangaReaderApp {
     view_mode: ViewMode,
     current_page: usize,
     app_title: Option<String>,
+    scroll_accumulator: f32,
 }
 
 impl Default for MangaReaderApp {
@@ -99,6 +100,7 @@ impl Default for MangaReaderApp {
             view_mode: ViewMode::Scroll,
             current_page: 0,
             app_title: None,
+            scroll_accumulator: 0.0,
         }
     }
 }
@@ -119,7 +121,6 @@ impl MangaReaderApp {
         self.folder_path = Some(folder_path.to_string());
 
         let mut paths: Vec<PathBuf> = Vec::new();
-        // Use proper escaping to prevent panics when folder path contains brackets
         let pattern_jpg = format!("{}/**/*.jpg", glob::Pattern::escape(folder_path));
         let pattern_png = format!("{}/**/*.png", glob::Pattern::escape(folder_path));
         let pattern_jpeg = format!("{}/**/*.jpeg", glob::Pattern::escape(folder_path));
@@ -178,13 +179,12 @@ impl MangaReaderApp {
     }
 
     fn load_textures(&mut self, _ctx: &egui::Context) {
-        // eframe::egui Image handles loading and caching automatically
         self.loading = false;
     }
 
     fn open_folder_dialog(&mut self, ctx: &egui::Context) {
         if let Some(path) = rfd::FileDialog::new().pick_folder() {
-            self._temp_dir = None; // clear previous temp dir
+            self._temp_dir = None;
             self.app_title = path.file_name().and_then(|n| n.to_str()).map(|s| s.to_string());
             if let Some(title) = &self.app_title {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("Manga Reader - {}", title)));
@@ -384,11 +384,11 @@ impl eframe::App for MangaReaderApp {
                     scroll_delta -= 1500.0 * dt;
                     requests_repaint = true;
                 }
-                if i.key_pressed(egui::Key::PageUp) {
+                if i.key_pressed(egui::Key::PageUp) || i.key_pressed(egui::Key::ArrowLeft) {
                     scroll_delta += page_scroll_amount;
                     requests_repaint = true;
                 }
-                if i.key_pressed(egui::Key::PageDown) {
+                if i.key_pressed(egui::Key::PageDown) || i.key_pressed(egui::Key::ArrowRight) {
                     scroll_delta -= page_scroll_amount;
                     requests_repaint = true;
                 }
@@ -410,6 +410,23 @@ impl eframe::App for MangaReaderApp {
                 }
                 if i.key_down(egui::Key::S) || i.key_down(egui::Key::ArrowDown) {
                     scroll_delta -= 1500.0 * dt;
+                    requests_repaint = true;
+                }
+
+                let scroll_y = i.smooth_scroll_delta.y;
+                if scroll_y != 0.0 {
+                    self.scroll_accumulator += scroll_y;
+                } else {
+                    self.scroll_accumulator *= 0.8;
+                }
+
+                if self.scroll_accumulator > 40.0 {
+                    prev_page = true;
+                    self.scroll_accumulator = 0.0;
+                    requests_repaint = true;
+                } else if self.scroll_accumulator < -40.0 {
+                    next_page = true;
+                    self.scroll_accumulator = 0.0;
                     requests_repaint = true;
                 }
             }
@@ -448,7 +465,18 @@ impl eframe::App for MangaReaderApp {
                 ui.add_space(10.0);
                 ui.label("Click button to select manga folder or archive");
                 ui.add_space(20.0);
-                ui.label("Keys: W/S or PageUp/PageDown to scroll");
+
+                ui.heading("Controls");
+                ui.add_space(5.0);
+                ui.label("Scroll Mode:");
+                ui.label("  • Mouse Wheel: Scroll vertically");
+                ui.label("  • W/S or Up/Down Arrows: Scroll smoothly");
+                ui.label("  • Left/Right Arrows or PageUp/PageDown: Scroll by page");
+                ui.add_space(5.0);
+                ui.label("Single Page Mode:");
+                ui.label("  • Mouse Wheel: Change page");
+                ui.label("  • Left/Right Arrows, PageUp/PageDown, Space: Change page");
+                ui.label("  • Click Left/Right side of image: Previous/Next page");
 
                 if self.loading {
                     ui.add_space(10.0);
@@ -512,7 +540,7 @@ impl eframe::App for MangaReaderApp {
                     egui::ScrollArea::vertical()
                         .auto_shrink([false; 2])
                         .stick_to_bottom(false)
-                        .wheel_scroll_multiplier(egui::vec2(3.0, 3.0)) // Increased scroll amplitude
+                        .wheel_scroll_multiplier(egui::vec2(3.0, 3.0))
                         .show(ui, |ui| {
                             if scroll_delta != 0.0 {
                                 ui.scroll_with_delta(egui::vec2(0.0, scroll_delta));
@@ -553,7 +581,6 @@ impl eframe::App for MangaReaderApp {
                                             .fit_to_exact_size(egui::vec2(final_w, final_h)),
                                     );
 
-                                    // Draw the page number over the image at the bottom right
                                     let painter = ui.painter();
                                     let rect = img_response.rect;
 
@@ -587,7 +614,7 @@ impl eframe::App for MangaReaderApp {
                     egui::ScrollArea::vertical()
                         .auto_shrink([false; 2])
                         .stick_to_bottom(false)
-                        .wheel_scroll_multiplier(egui::vec2(3.0, 3.0))
+                        .wheel_scroll_multiplier(egui::vec2(0.0, 0.0))
                         .show(ui, |ui| {
                             if scroll_delta != 0.0 {
                                 ui.scroll_with_delta(egui::vec2(0.0, scroll_delta));
@@ -611,10 +638,8 @@ impl eframe::App for MangaReaderApp {
                                         h = 1200.0;
                                     }
 
-                                    // Fit to screen height ideally for single page
                                     let scale_w = display_width / w;
                                     let scale_h = available_height / h;
-                                    // But let's allow it to be larger if the user wants, or fit entirely
                                     let scale = scale_w.min(scale_h).min(1.0);
                                     let final_w = w * scale;
                                     let final_h = h * scale;
@@ -679,7 +704,6 @@ impl eframe::App for MangaReaderApp {
                                     }
                                 });
 
-                                // 提前加载下一张图片
                                 if self.current_page + 1 < self.images.len() {
                                     let next_image_data = &self.images[self.current_page + 1];
                                     let next_uri = format!("file://{}", next_image_data.path.to_string_lossy());
@@ -707,7 +731,7 @@ fn main() -> eframe::Result<()> {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_app_id("manga_reader_app") // Explicit app_id for persistence feature to save/restore window bounds
+            .with_app_id("manga_reader_app")
             .with_inner_size([1000.0, 700.0])
             .with_min_inner_size([400.0, 300.0])
             .with_title(app.app_title.as_ref().map(|t| format!("Manga Reader - {}", t)).unwrap_or_else(|| "Manga Reader".to_string())),
