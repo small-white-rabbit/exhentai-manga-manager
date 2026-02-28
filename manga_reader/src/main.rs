@@ -810,8 +810,11 @@ impl eframe::App for MangaReaderApp {
                 ui.label("  • Click Left/Right side of image: Previous/Next page");
 
                 if self.loading {
-                    ui.add_space(10.0);
-                    ui.label("Loading...");
+                    ui.add_space(20.0);
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.heading("Loading...");
+                    });
                 }
             } else {
                 ui.horizontal(|ui| {
@@ -921,12 +924,12 @@ impl eframe::App for MangaReaderApp {
 
                                         let painter = ui.painter();
                                         let text = format!("{}/{}", index + 1, total_images);
-                                        let font_id = egui::FontId::proportional(16.0);
+                                        let font_id = egui::FontId::proportional(12.0);
                                         let text_color = egui::Color32::WHITE;
                                         let bg_color = egui::Color32::from_black_alpha(160);
                                         let galley =
                                             painter.layout_no_wrap(text, font_id, text_color);
-                                        let margin = egui::vec2(8.0, 4.0);
+                                        let margin = egui::vec2(6.0, 3.0);
                                         let text_rect = galley.rect;
                                         let bg_rect = egui::Rect::from_min_size(
                                             rect.right_bottom()
@@ -1034,11 +1037,11 @@ impl eframe::App for MangaReaderApp {
                                     let rect = img_response.rect;
                                     let text =
                                         format!("{}/{}", self.current_page + 1, self.images.len());
-                                    let font_id = egui::FontId::proportional(16.0);
+                                    let font_id = egui::FontId::proportional(12.0);
                                     let text_color = egui::Color32::WHITE;
                                     let bg_color = egui::Color32::from_black_alpha(160);
                                     let galley = painter.layout_no_wrap(text, font_id, text_color);
-                                    let margin = egui::vec2(8.0, 4.0);
+                                    let margin = egui::vec2(6.0, 3.0);
                                     let text_rect = galley.rect;
                                     let bg_rect = egui::Rect::from_min_size(
                                         rect.right_bottom()
