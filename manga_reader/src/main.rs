@@ -99,6 +99,7 @@ struct MangaReaderApp {
     load_receiver: Option<std::sync::mpsc::Receiver<LoadResultData>>,
     pending_load_path: Option<PathBuf>,
     scroll_area_id: String,
+    scroll_to_page: Option<usize>,
 }
 
 impl Default for MangaReaderApp {
@@ -122,6 +123,7 @@ impl Default for MangaReaderApp {
             load_receiver: None,
             pending_load_path: None,
             scroll_area_id: initial_id,
+            scroll_to_page: None,
         }
     }
 }
@@ -492,6 +494,7 @@ impl MangaReaderApp {
         self.image_width = 0.0;
         self.image_height = 0.0;
         self.current_page = 0;
+        self.scroll_to_page = None;
         self._temp_dir = None;
         self.load_receiver = None;
 
@@ -829,8 +832,12 @@ impl eframe::App for MangaReaderApp {
                     }
 
                     ui.separator();
+                    let prev_view_mode = self.view_mode;
                     ui.selectable_value(&mut self.view_mode, ViewMode::Scroll, "Scroll");
                     ui.selectable_value(&mut self.view_mode, ViewMode::SinglePage, "Single Page");
+                    if prev_view_mode != self.view_mode && self.view_mode == ViewMode::Scroll {
+                        self.scroll_to_page = Some(self.current_page);
+                    }
                     ui.separator();
 
                     if self.view_mode == ViewMode::SinglePage && !self.images.is_empty() {
@@ -913,6 +920,10 @@ impl eframe::App for MangaReaderApp {
                                     let (rect, _response) =
                                         ui.allocate_exact_size(image_size, egui::Sense::hover());
 
+                                    if Some(index) == self.scroll_to_page {
+                                        ui.scroll_to_rect(rect, Some(egui::Align::TOP));
+                                    }
+
                                     if ui.is_rect_visible(rect) {
                                         match &mut visible_range {
                                             Some((min_idx, max_idx)) => {
@@ -949,7 +960,17 @@ impl eframe::App for MangaReaderApp {
                             }
                         });
 
+                    let did_scroll_to_page = self.scroll_to_page.is_some();
+                    if did_scroll_to_page {
+                        self.scroll_to_page = None;
+                    }
+
                     if let Some((min_idx, max_idx)) = visible_range {
+                        if !did_scroll_to_page {
+                            self.current_page = min_idx;
+                            target_page = min_idx;
+                        }
+
                         let keep_min = min_idx.saturating_sub(3);
                         let keep_max = max_idx.saturating_add(3);
 
