@@ -35,9 +35,10 @@ const preparePath = () => {
   fs.mkdirSync(VIEWER_PATH, { recursive: true })
 }
 
+const _mange_reader = `"${path.join(getRootPath(), 'resources/extraResources/manga_reader.exe')}"`
+
 const prepareSetting = () => {
   let setting
-  const _mange_reader = `"${path.join(getRootPath(), 'resources/extraResources/manga_reader.exe')}"`
   try {
     setting = JSON.parse(fs.readFileSync(path.join(STORE_PATH, 'setting.json'), { encoding: 'utf-8' }))
     if (setting.imageExplorer === '"C:\\Windows\\explorer.exe"') {
@@ -98,5 +99,6 @@ module.exports = {
   VIEWER_PATH,
   prepareSetting,
   prepareCollectionList,
-  preparePath
+  preparePath,
+  _mange_reader,
 }

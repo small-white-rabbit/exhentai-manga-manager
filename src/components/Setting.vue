@@ -30,7 +30,12 @@
             <div class="setting-line">
               <el-input v-model="setting.imageExplorer" @change="saveSetting">
                 <template #prepend><span class="setting-label">{{$t('m.imageViewer')}}</span></template>
-                <template #append><el-button @click="selectImageExplorerPath">{{$t('m.select')}}</el-button></template>
+                <template #append>
+                  <el-button-group>
+                    <el-button :icon="MdRefresh" @click="resetImageExplorer" style="border-right: solid 1px"></el-button>
+                    <el-button @click="selectImageExplorerPath">{{$t('m.select')}}</el-button>
+                  </el-button-group>
+                </template>
               </el-input>
             </div>
           </el-col>
@@ -563,6 +568,11 @@ const selectImageExplorerPath = () => {
   })
 }
 
+const resetImageExplorer = () => {
+  setting.value.imageExplorer = ipcRenderer.sendSync('get-default-manga-reader')
+  saveSetting()
+}
+
 const loadTranslationFromEhTagTranslation = async () => {
   const resultObject = {}
   const translationCache = JSON.parse(localStorage.getItem('translationCache') || "{}")
@@ -694,9 +704,9 @@ const handleLanguageSet = async (languageCode) => {
   }
 }
 
-const saveSetting = () => {
+const saveSetting = _.debounce(() => {
   ipcRenderer.invoke('save-setting', _.cloneDeep(setting.value))
-}
+}, 500)
 
 const openLink = (link) => {
   ipcRenderer.invoke('open-url', link)

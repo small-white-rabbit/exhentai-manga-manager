@@ -19,7 +19,12 @@ const { globSync } = require('glob')
 const { prepareMangaModel, prepareMetadataModel } = require('./modules/database')
 const { prepareTemplate } = require('./modules/prepare_menu.js')
 const { getBookFilelist, geneCover, getImageListByBook, deleteImageFromBook } = require('./fileLoader/index.js')
-const { STORE_PATH, isPortable, TEMP_PATH, COVER_PATH, VIEWER_PATH, prepareSetting, prepareCollectionList, preparePath } = require('./modules/init_folder_setting.js')
+const {
+  STORE_PATH, isPortable,
+  TEMP_PATH, COVER_PATH, VIEWER_PATH,
+  prepareSetting, prepareCollectionList, preparePath,
+  _mange_reader
+} = require('./modules/init_folder_setting.js')
 const { findSameFile } = require('./fileLoader/folder.js')
 
 preparePath()
@@ -678,7 +683,15 @@ ipcMain.handle('use-new-cover', async (event, filepath) => {
 })
 
 ipcMain.handle('open-local-book', async (event, filepath) => {
-  exec(`${setting.imageExplorer} "${filepath}"`)
+  if (setting.imageExplorer) {
+    exec(`${setting.imageExplorer} "${filepath}"`)
+  } else {
+    shell.openPath(filepath)
+  }
+})
+
+ipcMain.on('get-default-manga-reader', async (event, arg) => {
+  event.returnValue = _mange_reader
 })
 
 ipcMain.handle('delete-local-book', async (event, filepath) => {
