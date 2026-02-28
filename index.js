@@ -690,8 +690,8 @@ ipcMain.handle('open-local-book', async (event, filepath) => {
   }
 })
 
-ipcMain.on('get-default-manga-reader', async (event, arg) => {
-  event.returnValue = _mange_reader
+ipcMain.handle('get-default-manga-reader', async (event, arg) => {
+  return _mange_reader
 })
 
 ipcMain.handle('delete-local-book', async (event, filepath) => {

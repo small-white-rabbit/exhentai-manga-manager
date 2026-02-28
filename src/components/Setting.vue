@@ -568,8 +568,8 @@ const selectImageExplorerPath = () => {
   })
 }
 
-const resetImageExplorer = () => {
-  setting.value.imageExplorer = ipcRenderer.sendSync('get-default-manga-reader')
+const resetImageExplorer = async () => {
+  setting.value.imageExplorer = await ipcRenderer.invoke('get-default-manga-reader')
   saveSetting()
 }
 
