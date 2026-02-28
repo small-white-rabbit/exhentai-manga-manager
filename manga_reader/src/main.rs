@@ -694,6 +694,12 @@ impl eframe::App for MangaReaderApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if ctx.input(|i| {
+            i.key_pressed(egui::Key::Escape) || i.pointer.button_clicked(egui::PointerButton::Extra1)
+        }) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+
         let dropped_file = ctx.input(|i| {
             i.raw.dropped_files.first().and_then(|f| f.path.clone())
         });
@@ -821,6 +827,9 @@ impl eframe::App for MangaReaderApp {
                 ui.label("  • Mouse Wheel: Change page");
                 ui.label("  • Left/Right Arrows, PageUp/PageDown, Space: Change page");
                 ui.label("  • Click Left/Right side of image: Previous/Next page");
+                ui.add_space(5.0);
+                ui.label("Global:");
+                ui.label("  • Esc / Mouse Back: Close window");
 
                 if self.loading {
                     ui.add_space(20.0);
