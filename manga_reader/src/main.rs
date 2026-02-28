@@ -694,6 +694,13 @@ impl eframe::App for MangaReaderApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let dropped_file = ctx.input(|i| {
+            i.raw.dropped_files.first().and_then(|f| f.path.clone())
+        });
+        if let Some(path) = dropped_file {
+            self.pending_load_path = Some(path);
+        }
+
         if let Some(path) = self.pending_load_path.take() {
             self.open_path(&path, Some(ctx));
         }
@@ -800,7 +807,7 @@ impl eframe::App for MangaReaderApp {
                 });
 
                 ui.add_space(10.0);
-                ui.label("Click button to select manga folder or archive");
+                ui.label("Click button or drop files here to select manga folder or archive");
                 ui.add_space(20.0);
 
                 ui.heading("Controls");
