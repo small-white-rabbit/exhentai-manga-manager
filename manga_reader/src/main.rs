@@ -77,6 +77,7 @@ fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
 enum ViewMode {
     Scroll,
     SinglePage,
+    DoublePage,
 }
 
 impl Default for ViewMode {
@@ -102,6 +103,7 @@ struct MangaReaderApp {
     scroll_to_page: Option<usize>,
     dark_mode: bool,
     reverse_left_right: bool,
+    first_page_single: bool,
 }
 
 impl Default for MangaReaderApp {
@@ -128,6 +130,7 @@ impl Default for MangaReaderApp {
             scroll_to_page: None,
             dark_mode: false,
             reverse_left_right: false,
+            first_page_single: true,
         }
     }
 }
@@ -489,6 +492,35 @@ fn do_load_archive(archive_path: &Path) -> Option<LoadResultData> {
 }
 
 impl MangaReaderApp {
+    fn get_current_page_indices(&self, target_page: usize) -> Vec<usize> {
+        if self.images.is_empty() {
+            return vec![];
+        }
+        let target = target_page.min(self.images.len().saturating_sub(1));
+        if self.view_mode != ViewMode::DoublePage {
+            return vec![target];
+        }
+
+        if self.first_page_single {
+            if target == 0 {
+                return vec![0];
+            }
+            let base = target - (target - 1) % 2;
+            if base + 1 < self.images.len() {
+                vec![base, base + 1]
+            } else {
+                vec![base]
+            }
+        } else {
+            let base = target - target % 2;
+            if base + 1 < self.images.len() {
+                vec![base, base + 1]
+            } else {
+                vec![base]
+            }
+        }
+    }
+
     fn clear_loaded_images(&mut self, ctx: Option<&egui::Context>) {
         if let Some(ctx) = ctx {
             ctx.forget_all_images();
@@ -697,6 +729,7 @@ impl eframe::App for MangaReaderApp {
         eframe::set_value(storage, "view_mode", &self.view_mode);
         eframe::set_value(storage, "dark_mode", &self.dark_mode);
         eframe::set_value(storage, "reverse_left_right", &self.reverse_left_right);
+        eframe::set_value(storage, "first_page_single", &self.first_page_single);
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -710,7 +743,7 @@ impl eframe::App for MangaReaderApp {
         }
 
         if ctx.input(|i| {
-            i.key_pressed(egui::Key::Escape) || i.pointer.button_clicked(egui::PointerButton::Extra1)
+            i.key_pressed(egui::Key::Escape) || i.pointer.button_pressed(egui::PointerButton::Extra1)
         }) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
@@ -773,6 +806,11 @@ impl eframe::App for MangaReaderApp {
                     requests_repaint = true;
                 }
             } else {
+                if i.key_pressed(egui::Key::Slash) {
+                    self.first_page_single = !self.first_page_single;
+                    requests_repaint = true;
+                }
+
                 let mut next_page = false;
                 let mut prev_page = false;
 
@@ -814,13 +852,23 @@ impl eframe::App for MangaReaderApp {
                     requests_repaint = true;
                 }
 
-                if next_page && !self.images.is_empty() && target_page + 1 < self.images.len() {
-                    target_page += 1;
-                    scroll_delta = 0.0;
+                if next_page && !self.images.is_empty() {
+                    let indices = self.get_current_page_indices(target_page);
+                    if let Some(&last_idx) = indices.last() {
+                        if last_idx + 1 < self.images.len() {
+                            target_page = last_idx + 1;
+                            scroll_delta = 0.0;
+                        }
+                    }
                 }
-                if prev_page && target_page > 0 {
-                    target_page -= 1;
-                    scroll_delta = 0.0;
+                if prev_page {
+                    let indices = self.get_current_page_indices(target_page);
+                    if let Some(&first_idx) = indices.first() {
+                        if first_idx > 0 {
+                            target_page = first_idx - 1;
+                            scroll_delta = 0.0;
+                        }
+                    }
                 }
             }
         });
@@ -867,11 +915,12 @@ impl eframe::App for MangaReaderApp {
                 ui.label("  • Space: Next page scroll");
 
                 ui.add_space(5.0);
-                ui.label("Single Page Mode:");
+                ui.label("Single/Double Page Mode:");
                 ui.label("  • Mouse Wheel: Change page");
                 ui.label("  • Left/Right Arrows: Change page (affected by RTL)");
                 ui.label("  • Space: Next page");
                 ui.label("  • Click Left/Right side: Previous/Next page (affected by RTL)");
+                ui.label("  • / (Slash): Toggle first page single/double (Double Page mode)");
 
                 ui.add_space(5.0);
                 ui.label("Global:");
@@ -905,6 +954,7 @@ impl eframe::App for MangaReaderApp {
                     let prev_view_mode = self.view_mode;
                     ui.selectable_value(&mut self.view_mode, ViewMode::Scroll, "Scroll");
                     ui.selectable_value(&mut self.view_mode, ViewMode::SinglePage, "Single Page");
+                    ui.selectable_value(&mut self.view_mode, ViewMode::DoublePage, "Double Page");
                     if prev_view_mode != self.view_mode && self.view_mode == ViewMode::Scroll {
                         self.scroll_to_page = Some(self.current_page);
                     }
@@ -1021,16 +1071,19 @@ impl eframe::App for MangaReaderApp {
                             target_page = min_idx;
                         }
 
-                        let keep_min = min_idx.saturating_sub(3);
-                        let keep_max = max_idx.saturating_add(3);
+                        let preload_min = min_idx.saturating_sub(3);
+                        let preload_max = max_idx.saturating_add(3);
 
-                        for i in keep_min..=keep_max {
+                        for i in preload_min..=preload_max {
                             if i < self.images.len() && (i < min_idx || i > max_idx) {
                                 let pre_image_data = &self.images[i];
                                 let pre_image = Self::archive_image_widget(pre_image_data);
                                 let _ = pre_image.load_for_size(ui.ctx(), ui.available_size());
                             }
                         }
+
+                        let keep_min = min_idx.saturating_sub(5);
+                        let keep_max = max_idx.saturating_add(6);
 
                         for i in 0..self.images.len() {
                             if i < keep_min || i > keep_max {
@@ -1053,41 +1106,92 @@ impl eframe::App for MangaReaderApp {
                             }
 
                             if self.current_page < self.images.len() {
-                                let image_data = &self.images[self.current_page];
+                                let indices = self.get_current_page_indices(self.current_page);
 
                                 ui.vertical_centered(|ui| {
                                     let display_width = ui.available_width();
-                                    let mut w = image_data.width;
-                                    let mut h = image_data.height;
-                                    if w == 0.0 || h == 0.0 {
-                                        w = self.image_width;
-                                        h = self.image_height;
-                                    }
-                                    if w == 0.0 || h == 0.0 {
-                                        w = 800.0;
-                                        h = 1200.0;
-                                    }
+                                    let final_rect;
+                                    let final_h_total;
 
-                                    let scale_w = display_width / w;
-                                    let scale_h = available_height / h;
-                                    let scale = scale_w.min(scale_h).min(1.0);
-                                    let final_w = w * scale;
-                                    let final_h = h * scale;
+                                    if indices.len() == 1 {
+                                        let image_data = &self.images[indices[0]];
+                                        let mut w = image_data.width;
+                                        let mut h = image_data.height;
+                                        if w == 0.0 || h == 0.0 {
+                                            w = self.image_width;
+                                            h = self.image_height;
+                                        }
+                                        if w == 0.0 || h == 0.0 {
+                                            w = 800.0;
+                                            h = 1200.0;
+                                        }
 
-                                    if final_h < available_height - 1.0 {
-                                        let padding = (available_height - final_h) / 2.0;
-                                        ui.add_space(padding);
+                                        let scale_w = display_width / w;
+                                        let scale_h = available_height / h;
+                                        let scale = scale_w.min(scale_h);
+                                        let final_w = w * scale;
+                                        let final_h = h * scale;
+                                        final_h_total = final_h;
+
+                                        if final_h < available_height - 1.0 {
+                                            let padding = (available_height - final_h) / 2.0;
+                                            ui.add_space(padding);
+                                        }
+
+                                        let img_response = ui.add(
+                                            Self::archive_image_widget(image_data)
+                                                .fit_to_exact_size(egui::vec2(final_w, final_h)),
+                                        );
+                                        final_rect = img_response.rect;
+                                    } else {
+                                        let data1 = &self.images[indices[0]];
+                                        let data2 = &self.images[indices[1]];
+
+                                        let mut w1 = data1.width; let mut h1 = data1.height;
+                                        if w1 == 0.0 || h1 == 0.0 { w1 = self.image_width; h1 = self.image_height; }
+                                        if w1 == 0.0 || h1 == 0.0 { w1 = 800.0; h1 = 1200.0; }
+
+                                        let mut w2 = data2.width; let mut h2 = data2.height;
+                                        if w2 == 0.0 || h2 == 0.0 { w2 = self.image_width; h2 = self.image_height; }
+                                        if w2 == 0.0 || h2 == 0.0 { w2 = 800.0; h2 = 1200.0; }
+
+                                        let ref_h = 1000.0;
+                                        let norm_w1 = w1 * (ref_h / h1);
+                                        let norm_w2 = w2 * (ref_h / h2);
+                                        let total_norm_w = norm_w1 + norm_w2;
+
+                                        let scale_w = display_width / total_norm_w;
+                                        let scale_h = available_height / ref_h;
+                                        let scale = scale_w.min(scale_h);
+
+                                        let final_h = ref_h * scale;
+                                        let final_w1 = norm_w1 * scale;
+                                        let final_w2 = norm_w2 * scale;
+                                        final_h_total = final_h;
+
+                                        if final_h < available_height - 1.0 {
+                                            let padding = (available_height - final_h) / 2.0;
+                                            ui.add_space(padding);
+                                        }
+
+                                        let (rect, _resp) = ui.allocate_exact_size(egui::vec2(final_w1 + final_w2, final_h), egui::Sense::hover());
+                                        final_rect = rect;
+
+                                        let (left_idx, right_idx) = (1, 0);
+                                        let left_w = final_w2;
+                                        let right_w = final_w1;
+
+                                        let left_rect = egui::Rect::from_min_size(rect.min, egui::vec2(left_w, final_h));
+                                        let right_rect = egui::Rect::from_min_size(rect.min + egui::vec2(left_w, 0.0), egui::vec2(right_w, final_h));
+
+                                        Self::archive_image_widget(&self.images[indices[left_idx]]).paint_at(ui, left_rect);
+                                        Self::archive_image_widget(&self.images[indices[right_idx]]).paint_at(ui, right_rect);
                                     }
-
-                                    let img_response = ui.add(
-                                        Self::archive_image_widget(image_data)
-                                            .fit_to_exact_size(egui::vec2(final_w, final_h)),
-                                    );
 
                                     let clip_rect = ui.clip_rect();
                                     let click_response = ui.interact(
                                         clip_rect,
-                                        ui.id().with("single_page_click"),
+                                        ui.id().with(format!("page_click_{}", indices[0])),
                                         egui::Sense::click(),
                                     );
 
@@ -1102,21 +1206,28 @@ impl eframe::App for MangaReaderApp {
                                             };
 
                                             if go_next {
-                                                if target_page + 1 < self.images.len() {
-                                                    target_page += 1;
+                                                let last_idx = *indices.last().unwrap();
+                                                if last_idx + 1 < self.images.len() {
+                                                    target_page = last_idx + 1;
                                                     requests_repaint = true;
                                                 }
-                                            } else if target_page > 0 {
-                                                target_page -= 1;
-                                                requests_repaint = true;
+                                            } else {
+                                                let first_idx = *indices.first().unwrap();
+                                                if first_idx > 0 {
+                                                    target_page = first_idx - 1;
+                                                    requests_repaint = true;
+                                                }
                                             }
                                         }
                                     }
 
                                     let painter = ui.painter();
-                                    let rect = img_response.rect;
-                                    let text =
-                                        format!("{}/{}", self.current_page + 1, self.images.len());
+                                    let rect = final_rect;
+                                    let text = if indices.len() == 1 {
+                                        format!("{}/{}", indices[0] + 1, self.images.len())
+                                    } else {
+                                        format!("{}-{} / {}", indices[0] + 1, indices[1] + 1, self.images.len())
+                                    };
                                     let font_id = egui::FontId::proportional(12.0);
                                     let text_color = egui::Color32::WHITE;
                                     let bg_color = egui::Color32::from_black_alpha(160);
@@ -1133,22 +1244,18 @@ impl eframe::App for MangaReaderApp {
                                     painter.rect_filled(bg_rect, 4.0, bg_color);
                                     painter.galley(bg_rect.min + margin, galley, text_color);
 
-                                    if final_h < available_height - 1.0 {
+                                    if final_h_total < available_height - 1.0 {
                                         ui.add_space(4.0);
                                     }
                                 });
 
-                                let pre_min = self.current_page.saturating_sub(3);
-                                let pre_max = self
-                                    .current_page
-                                    .saturating_add(3)
-                                    .min(self.images.len().saturating_sub(1));
+                                let pre_min = indices.first().unwrap().saturating_sub(4);
+                                let pre_max = indices.last().unwrap().saturating_add(4).min(self.images.len().saturating_sub(1));
                                 for i in pre_min..=pre_max {
-                                    if i != self.current_page {
+                                    if !indices.contains(&i) {
                                         let pre_image_data = &self.images[i];
                                         let pre_image = Self::archive_image_widget(pre_image_data);
-                                        let _ =
-                                            pre_image.load_for_size(ui.ctx(), ui.available_size());
+                                        let _ = pre_image.load_for_size(ui.ctx(), ui.available_size());
                                     }
                                 }
                             }
@@ -1157,9 +1264,12 @@ impl eframe::App for MangaReaderApp {
             }
         });
 
-        if self.view_mode == ViewMode::SinglePage && target_page != self.current_page {
-            let keep_min = target_page.saturating_sub(3);
-            let keep_max = target_page.saturating_add(3);
+        if (self.view_mode == ViewMode::SinglePage || self.view_mode == ViewMode::DoublePage) && target_page != self.current_page {
+            let indices = self.get_current_page_indices(target_page);
+            let aligned_page = indices[0];
+
+            let keep_min = aligned_page.saturating_sub(4);
+            let keep_max = aligned_page.saturating_add(6);
             for i in 0..self.images.len() {
                 if i < keep_min || i > keep_max {
                     if let Some(uri) = self.get_image_uri(i) {
@@ -1167,7 +1277,7 @@ impl eframe::App for MangaReaderApp {
                     }
                 }
             }
-            self.current_page = target_page;
+            self.current_page = aligned_page;
             requests_repaint = true;
         } else if self.view_mode == ViewMode::Scroll && target_page != self.current_page {
             self.current_page = target_page;
@@ -1215,6 +1325,9 @@ fn main() -> eframe::Result<()> {
                 }
                 if let Some(reverse_left_right) = eframe::get_value(storage, "reverse_left_right") {
                     app.reverse_left_right = reverse_left_right;
+                }
+                if let Some(first_page_single) = eframe::get_value(storage, "first_page_single") {
+                    app.first_page_single = first_page_single;
                 }
             }
             Ok(Box::new(app))
