@@ -10,7 +10,6 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const ARCHIVE_IN_MEMORY_LIMIT_BYTES: usize = 1024 * 1024 * 1024;
-const ARCHIVE_ESTIMATED_DECODED_LIMIT_BYTES: usize = 8192 * 1024 * 1024;
 
 fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     let mut a_iter = a.chars().peekable();
@@ -316,7 +315,6 @@ fn do_load_archive(archive_path: &Path) -> Option<LoadResultData> {
 
     let mut memory_images: Vec<(String, Vec<u8>)> = Vec::new();
     let mut total_encoded_bytes = 0usize;
-    let mut total_estimated_decoded_bytes = 0usize;
     let mut memory_limit_exceeded = false;
 
     if ext == "zip" || ext == "cbz" {
@@ -338,16 +336,7 @@ fn do_load_archive(archive_path: &Path) -> Option<LoadResultData> {
                         let mut bytes = Vec::new();
                         if file.read_to_end(&mut bytes).is_ok() {
                             total_encoded_bytes = total_encoded_bytes.saturating_add(bytes.len());
-                            total_estimated_decoded_bytes = total_estimated_decoded_bytes
-                                .saturating_add(
-                                    MangaReaderApp::estimated_decoded_bytes_from_image_bytes(
-                                        &bytes,
-                                    ),
-                                );
-                            if total_encoded_bytes > ARCHIVE_IN_MEMORY_LIMIT_BYTES
-                                || total_estimated_decoded_bytes
-                                    > ARCHIVE_ESTIMATED_DECODED_LIMIT_BYTES
-                            {
+                            if total_encoded_bytes > ARCHIVE_IN_MEMORY_LIMIT_BYTES {
                                 memory_limit_exceeded = true;
                                 break;
                             }
@@ -371,13 +360,7 @@ fn do_load_archive(archive_path: &Path) -> Option<LoadResultData> {
                     let mut bytes = Vec::new();
                     if reader.read_to_end(&mut bytes).is_ok() {
                         total_encoded_bytes = total_encoded_bytes.saturating_add(bytes.len());
-                        total_estimated_decoded_bytes = total_estimated_decoded_bytes
-                            .saturating_add(
-                                MangaReaderApp::estimated_decoded_bytes_from_image_bytes(&bytes),
-                            );
-                        if total_encoded_bytes > ARCHIVE_IN_MEMORY_LIMIT_BYTES
-                            || total_estimated_decoded_bytes > ARCHIVE_ESTIMATED_DECODED_LIMIT_BYTES
-                        {
+                        if total_encoded_bytes > ARCHIVE_IN_MEMORY_LIMIT_BYTES {
                             memory_limit_exceeded = true;
                             return Ok(true);
                         }
@@ -404,16 +387,7 @@ fn do_load_archive(archive_path: &Path) -> Option<LoadResultData> {
                                 Ok((bytes, next)) => {
                                     total_encoded_bytes =
                                         total_encoded_bytes.saturating_add(bytes.len());
-                                    total_estimated_decoded_bytes = total_estimated_decoded_bytes
-                                        .saturating_add(
-                                        MangaReaderApp::estimated_decoded_bytes_from_image_bytes(
-                                            &bytes,
-                                        ),
-                                    );
-                                    if total_encoded_bytes > ARCHIVE_IN_MEMORY_LIMIT_BYTES
-                                        || total_estimated_decoded_bytes
-                                            > ARCHIVE_ESTIMATED_DECODED_LIMIT_BYTES
-                                    {
+                                    if total_encoded_bytes > ARCHIVE_IN_MEMORY_LIMIT_BYTES {
                                         memory_limit_exceeded = true;
                                         break;
                                     }
@@ -539,15 +513,6 @@ impl MangaReaderApp {
             .unwrap_or_default()
             .as_nanos()
             .to_string();
-    }
-
-    fn estimated_decoded_bytes_from_image_bytes(bytes: &[u8]) -> usize {
-        let (w, h) = Self::image_dimensions_from_bytes(bytes);
-        if w > 0.0 && h > 0.0 {
-            (w as usize).saturating_mul(h as usize).saturating_mul(4)
-        } else {
-            0
-        }
     }
 
     fn load_images(&mut self, folder_path: &str, ctx: Option<&egui::Context>) {
