@@ -475,24 +475,50 @@ impl MangaReaderApp {
             return vec![target];
         }
 
-        if self.first_page_single {
-            if target == 0 {
-                return vec![0];
+        let mut current_idx = 0;
+        let mut is_first_page = true;
+
+        while current_idx < self.images.len() {
+            let mut page_indices = Vec::new();
+            let img1 = &self.images[current_idx];
+            let mut w1 = img1.width;
+            let mut h1 = img1.height;
+            if w1 == 0.0 || h1 == 0.0 {
+                w1 = self.image_width;
+                h1 = self.image_height;
             }
-            let base = target - (target - 1) % 2;
-            if base + 1 < self.images.len() {
-                vec![base, base + 1]
+
+            if w1 > h1 || (is_first_page && self.first_page_single) {
+                page_indices.push(current_idx);
+                current_idx += 1;
             } else {
-                vec![base]
+                page_indices.push(current_idx);
+                current_idx += 1;
+
+                if current_idx < self.images.len() {
+                    let img2 = &self.images[current_idx];
+                    let mut w2 = img2.width;
+                    let mut h2 = img2.height;
+                    if w2 == 0.0 || h2 == 0.0 {
+                        w2 = self.image_width;
+                        h2 = self.image_height;
+                    }
+
+                    if w2 <= h2 {
+                        page_indices.push(current_idx);
+                        current_idx += 1;
+                    }
+                }
             }
-        } else {
-            let base = target - target % 2;
-            if base + 1 < self.images.len() {
-                vec![base, base + 1]
-            } else {
-                vec![base]
+
+            if page_indices.contains(&target) {
+                return page_indices;
             }
+
+            is_first_page = false;
         }
+
+        vec![target]
     }
 
     fn clear_loaded_images(&mut self, ctx: Option<&egui::Context>) {
