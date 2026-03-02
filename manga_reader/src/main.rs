@@ -101,6 +101,7 @@ struct MangaReaderApp {
     scroll_area_id: String,
     scroll_to_page: Option<usize>,
     dark_mode: bool,
+    reverse_left_right: bool,
 }
 
 impl Default for MangaReaderApp {
@@ -126,6 +127,7 @@ impl Default for MangaReaderApp {
             scroll_area_id: initial_id,
             scroll_to_page: None,
             dark_mode: false,
+            reverse_left_right: false,
         }
     }
 }
@@ -694,6 +696,7 @@ impl eframe::App for MangaReaderApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, "view_mode", &self.view_mode);
         eframe::set_value(storage, "dark_mode", &self.dark_mode);
+        eframe::set_value(storage, "reverse_left_right", &self.reverse_left_right);
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -747,19 +750,25 @@ impl eframe::App for MangaReaderApp {
         ctx.input(|i| {
             let dt = i.stable_dt;
             if self.view_mode == ViewMode::Scroll {
-                if i.key_down(egui::Key::W) || i.key_down(egui::Key::ArrowUp) {
+                if i.key_down(egui::Key::ArrowUp) {
                     scroll_delta += 1500.0 * dt;
                     requests_repaint = true;
                 }
-                if i.key_down(egui::Key::S) || i.key_down(egui::Key::ArrowDown) {
+                if i.key_down(egui::Key::ArrowDown) {
                     scroll_delta -= 1500.0 * dt;
                     requests_repaint = true;
                 }
-                if i.key_pressed(egui::Key::PageUp) || i.key_pressed(egui::Key::ArrowLeft) {
-                    scroll_delta += page_scroll_amount;
+                if i.key_pressed(egui::Key::ArrowLeft) {
+                    let dir = if self.reverse_left_right { -1.0 } else { 1.0 };
+                    scroll_delta += page_scroll_amount * dir;
                     requests_repaint = true;
                 }
-                if i.key_pressed(egui::Key::PageDown) || i.key_pressed(egui::Key::ArrowRight) {
+                if i.key_pressed(egui::Key::ArrowRight) {
+                    let dir = if self.reverse_left_right { 1.0 } else { -1.0 };
+                    scroll_delta += page_scroll_amount * dir;
+                    requests_repaint = true;
+                }
+                if i.key_pressed(egui::Key::Space) {
                     scroll_delta -= page_scroll_amount;
                     requests_repaint = true;
                 }
@@ -767,15 +776,24 @@ impl eframe::App for MangaReaderApp {
                 let mut next_page = false;
                 let mut prev_page = false;
 
-                if i.key_pressed(egui::Key::ArrowRight)
-                    || i.key_pressed(egui::Key::PageDown)
-                    || i.key_pressed(egui::Key::Space)
-                {
-                    next_page = true;
+                if i.key_pressed(egui::Key::ArrowRight) {
+                    if self.reverse_left_right {
+                        prev_page = true;
+                    } else {
+                        next_page = true;
+                    }
                     requests_repaint = true;
                 }
-                if i.key_pressed(egui::Key::ArrowLeft) || i.key_pressed(egui::Key::PageUp) {
-                    prev_page = true;
+                if i.key_pressed(egui::Key::ArrowLeft) {
+                    if self.reverse_left_right {
+                        next_page = true;
+                    } else {
+                        prev_page = true;
+                    }
+                    requests_repaint = true;
+                }
+                if i.key_pressed(egui::Key::Space) {
+                    next_page = true;
                     requests_repaint = true;
                 }
 
@@ -833,8 +851,9 @@ impl eframe::App for MangaReaderApp {
                     if ui.button(mode_text).clicked() {
                         self.dark_mode = !self.dark_mode;
                     }
+                    ui.separator();
+                    ui.checkbox(&mut self.reverse_left_right, "Reverse L/R page turn");
                 });
-
                 ui.add_space(10.0);
                 ui.label("Click button or drop files here to select manga folder or archive");
                 ui.add_space(20.0);
@@ -843,13 +862,17 @@ impl eframe::App for MangaReaderApp {
                 ui.add_space(5.0);
                 ui.label("Scroll Mode:");
                 ui.label("  • Mouse Wheel: Scroll vertically");
-                ui.label("  • W/S or Up/Down Arrows: Scroll smoothly");
-                ui.label("  • Left/Right Arrows or PageUp/PageDown: Scroll by page");
+                ui.label("  • Up/Down Arrows: Scroll smoothly");
+                ui.label("  • Left/Right Arrows: Scroll by page (affected by RTL)");
+                ui.label("  • Space: Next page scroll");
+
                 ui.add_space(5.0);
                 ui.label("Single Page Mode:");
                 ui.label("  • Mouse Wheel: Change page");
-                ui.label("  • Left/Right Arrows, PageUp/PageDown, Space: Change page");
-                ui.label("  • Click Left/Right side of image: Previous/Next page");
+                ui.label("  • Left/Right Arrows: Change page (affected by RTL)");
+                ui.label("  • Space: Next page");
+                ui.label("  • Click Left/Right side: Previous/Next page (affected by RTL)");
+
                 ui.add_space(5.0);
                 ui.label("Global:");
                 ui.label("  • Esc / Mouse Back: Close window");
@@ -869,30 +892,29 @@ impl eframe::App for MangaReaderApp {
                     if ui.button("Open Archive").clicked() {
                         self.open_archive_dialog(ctx);
                     }
-
-                    ui.separator();
-                    let prev_view_mode = self.view_mode;
-                    ui.selectable_value(&mut self.view_mode, ViewMode::Scroll, "Scroll");
-                    ui.selectable_value(&mut self.view_mode, ViewMode::SinglePage, "Single Page");
-                    if prev_view_mode != self.view_mode && self.view_mode == ViewMode::Scroll {
-                        self.scroll_to_page = Some(self.current_page);
-                    }
-                    ui.separator();
-
-                    let mode_text = if self.dark_mode { "🌙 Dark" } else { "☀ Light" };
-                    if ui.button(mode_text).clicked() {
-                        self.dark_mode = !self.dark_mode;
-                    }
-                    ui.separator();
-
-                    ui.label(format!("{} images", self.images.len()));
-
                     if ui.button("Close").clicked() {
                         self.clear_loaded_images(Some(ctx));
                         self.app_title = None;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Title(
                             "Manga Reader".to_string(),
                         ));
+                    }
+
+                    ui.separator();
+
+                    let prev_view_mode = self.view_mode;
+                    ui.selectable_value(&mut self.view_mode, ViewMode::Scroll, "Scroll");
+                    ui.selectable_value(&mut self.view_mode, ViewMode::SinglePage, "Single Page");
+                    if prev_view_mode != self.view_mode && self.view_mode == ViewMode::Scroll {
+                        self.scroll_to_page = Some(self.current_page);
+                    }
+                    ui.checkbox(&mut self.reverse_left_right, "RTL");
+
+                    ui.separator();
+
+                    let mode_text = if self.dark_mode { "🌙 Dark" } else { "☀ Light" };
+                    if ui.button(mode_text).clicked() {
+                        self.dark_mode = !self.dark_mode;
                     }
 
                     if self.loading {
@@ -1071,16 +1093,22 @@ impl eframe::App for MangaReaderApp {
 
                                     if click_response.clicked() {
                                         if let Some(pos) = click_response.interact_pointer_pos() {
-                                            if pos.x > clip_rect.center().x {
+                                            let clicked_right = pos.x > clip_rect.center().x;
+                                            let next_on_right = !self.reverse_left_right;
+                                            let go_next = if clicked_right {
+                                                next_on_right
+                                            } else {
+                                                !next_on_right
+                                            };
+
+                                            if go_next {
                                                 if target_page + 1 < self.images.len() {
                                                     target_page += 1;
                                                     requests_repaint = true;
                                                 }
-                                            } else {
-                                                if target_page > 0 {
-                                                    target_page -= 1;
-                                                    requests_repaint = true;
-                                                }
+                                            } else if target_page > 0 {
+                                                target_page -= 1;
+                                                requests_repaint = true;
                                             }
                                         }
                                     }
@@ -1184,6 +1212,9 @@ fn main() -> eframe::Result<()> {
                 }
                 if let Some(dark_mode) = eframe::get_value(storage, "dark_mode") {
                     app.dark_mode = dark_mode;
+                }
+                if let Some(reverse_left_right) = eframe::get_value(storage, "reverse_left_right") {
+                    app.reverse_left_right = reverse_left_right;
                 }
             }
             Ok(Box::new(app))
