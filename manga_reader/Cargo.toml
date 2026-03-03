@@ -14,6 +14,8 @@ eframe = { version = "0.32.3", features = ["persistence"] }
 sevenz-rust = "0.6.1"
 unrar = "0.5.8"
 egui_extras = { version = "0.32.3", features = ["all_loaders"] }
+rayon = "1.11.0"
+walkdir = "2.5.0"
 
 [profile.release]
 opt-level = 3

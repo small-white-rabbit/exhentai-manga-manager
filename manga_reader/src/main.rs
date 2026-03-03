@@ -9,6 +9,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::cmp::Ordering;
+use rayon::prelude::*;
+use walkdir::WalkDir;
+use std::collections::HashSet;
 
 const ARCHIVE_IN_MEMORY_LIMIT_BYTES: usize = 1024 * 1024 * 1024;
 
@@ -88,6 +91,7 @@ struct MangaReaderApp {
     dark_mode: bool,
     reverse_left_right: bool,
     first_page_single: bool,
+    loaded_texture_indices: HashSet<usize>,
 }
 
 impl Default for MangaReaderApp {
@@ -115,6 +119,7 @@ impl Default for MangaReaderApp {
             dark_mode: false,
             reverse_left_right: false,
             first_page_single: true,
+            loaded_texture_indices: HashSet::new(),
         }
     }
 }
@@ -139,36 +144,17 @@ struct LoadResultData {
 
 fn do_load_images(folder_path: &str) -> (Vec<ImageData>, f32, f32) {
     let mut paths: Vec<PathBuf> = Vec::new();
-    let pattern_jpg = format!("{}/**/*.jpg", glob::Pattern::escape(folder_path));
-    let pattern_png = format!("{}/**/*.png", glob::Pattern::escape(folder_path));
-    let pattern_jpeg = format!("{}/**/*.jpeg", glob::Pattern::escape(folder_path));
-    let pattern_webp = format!("{}/**/*.webp", glob::Pattern::escape(folder_path));
-    let pattern_gif = format!("{}/**/*.gif", glob::Pattern::escape(folder_path));
 
-    let mut collect_paths = |pattern: &str| {
-        let options = glob::MatchOptions {
-            case_sensitive: false,
-            require_literal_separator: false,
-            require_literal_leading_dot: false,
-        };
-        if let Ok(glob_paths) = glob::glob_with(pattern, options) {
-            paths.extend(glob_paths.filter_map(Result::ok));
+    for entry in WalkDir::new(folder_path).into_iter().filter_map(|e| e.ok()) {
+        let path = entry.into_path();
+        if path.is_file() && MangaReaderApp::is_supported_image(&path) {
+            paths.push(path);
         }
-    };
-
-    collect_paths(&pattern_jpg);
-    collect_paths(&pattern_png);
-    collect_paths(&pattern_jpeg);
-    collect_paths(&pattern_webp);
-    collect_paths(&pattern_gif);
+    }
 
     paths.sort_by(|a, b| natural_cmp(a.to_str().unwrap_or(""), b.to_str().unwrap_or("")));
 
-    let mut images = Vec::new();
-    let mut image_width = 0.0;
-    let mut image_height = 0.0;
-
-    for path in paths {
+    let images: Vec<ImageData> = paths.into_par_iter().map(|path| {
         let mut w = 0.0;
         let mut h = 0.0;
         if let Ok(dimensions) = image::image_dimensions(&path) {
@@ -176,16 +162,22 @@ fn do_load_images(folder_path: &str) -> (Vec<ImageData>, f32, f32) {
             h = dimensions.1 as f32;
         }
 
-        if image_width == 0.0 && image_height == 0.0 && w > 0.0 {
-            image_width = w;
-            image_height = h;
-        }
-
-        images.push(ImageData {
+        ImageData {
             source: ImageSource::File(path),
             width: w,
             height: h,
-        });
+        }
+    }).collect();
+
+    let mut image_width = 0.0;
+    let mut image_height = 0.0;
+
+    for img in &images {
+        if image_width == 0.0 && image_height == 0.0 && img.width > 0.0 {
+            image_width = img.width;
+            image_height = img.height;
+            break;
+        }
     }
 
     (images, image_width, image_height)
@@ -518,6 +510,7 @@ impl MangaReaderApp {
         self.scroll_to_page = None;
         self._temp_dir = None;
         self.load_receiver = None;
+        self.loaded_texture_indices.clear();
 
         self.scroll_area_id = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1061,13 +1054,18 @@ impl eframe::App for MangaReaderApp {
                         let keep_min = min_idx.saturating_sub(5);
                         let keep_max = max_idx.saturating_add(6);
 
-                        for i in 0..self.images.len() {
-                            if i < keep_min || i > keep_max {
+                        let current_visible_range: HashSet<usize> = (keep_min..=keep_max).collect();
+                        let to_remove: Vec<usize> = self.loaded_texture_indices.difference(&current_visible_range).copied().collect();
+
+                        for i in to_remove {
+                            if i < self.images.len() {
                                 if let Some(uri) = self.get_image_uri(i) {
                                     ctx.forget_image(&uri);
                                 }
                             }
+                            self.loaded_texture_indices.remove(&i);
                         }
+                        self.loaded_texture_indices.extend(current_visible_range.into_iter().filter(|&i| i < self.images.len()));
                     }
                 } else {
                     let available_height = ui.available_height();
@@ -1225,7 +1223,7 @@ impl eframe::App for MangaReaderApp {
                                     }
                                 });
 
-                                let pre_min = indices.first().unwrap().saturating_sub(4);
+                                let pre_min = indices.first().unwrap().saturating_sub(3);
                                 let pre_max = indices.last().unwrap().saturating_add(4).min(self.images.len().saturating_sub(1));
                                 for i in pre_min..=pre_max {
                                     if !indices.contains(&i) {
@@ -1244,15 +1242,22 @@ impl eframe::App for MangaReaderApp {
             let indices = self.get_current_page_indices(target_page);
             let aligned_page = indices[0];
 
-            let keep_min = aligned_page.saturating_sub(4);
+            let keep_min = aligned_page.saturating_sub(5);
             let keep_max = aligned_page.saturating_add(6);
-            for i in 0..self.images.len() {
-                if i < keep_min || i > keep_max {
+
+            let current_visible_range: HashSet<usize> = (keep_min..=keep_max).collect();
+            let to_remove: Vec<usize> = self.loaded_texture_indices.difference(&current_visible_range).copied().collect();
+
+            for i in to_remove {
+                if i < self.images.len() {
                     if let Some(uri) = self.get_image_uri(i) {
                         ctx.forget_image(&uri);
                     }
                 }
+                self.loaded_texture_indices.remove(&i);
             }
+            self.loaded_texture_indices.extend(current_visible_range.into_iter().filter(|&i| i < self.images.len()));
+
             self.current_page = aligned_page;
             requests_repaint = true;
         } else if self.view_mode == ViewMode::Scroll && target_page != self.current_page {
