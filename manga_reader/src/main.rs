@@ -8,66 +8,51 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::cmp::Ordering;
 
 const ARCHIVE_IN_MEMORY_LIMIT_BYTES: usize = 1024 * 1024 * 1024;
 
-fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
-    let mut a_iter = a.chars().peekable();
-    let mut b_iter = b.chars().peekable();
+fn natural_cmp(a: &str, b: &str) -> Ordering {
+    let mut a_chars = a.char_indices().peekable();
+    let mut b_chars = b.char_indices().peekable();
 
     loop {
-        let a_opt = a_iter.peek().copied();
-        let b_opt = b_iter.peek().copied();
+        match (a_chars.peek(), b_chars.peek()) {
+            (Some(&(i, ac)), Some(&(j, bc))) => {
+                if ac.is_ascii_digit() && bc.is_ascii_digit() {
+                    let a_start = i;
+                    let b_start = j;
 
-        match (a_opt, b_opt) {
-            (Some(ac), Some(bc)) if ac.is_ascii_digit() && bc.is_ascii_digit() => {
-                let mut a_num_str = String::new();
-                while let Some(&c) = a_iter.peek() {
-                    if c.is_ascii_digit() {
-                        a_num_str.push(c);
-                        a_iter.next();
-                    } else {
-                        break;
+                    while let Some(&(_, c)) = a_chars.peek() {
+                        if c.is_ascii_digit() { a_chars.next(); } else { break; }
                     }
-                }
-
-                let mut b_num_str = String::new();
-                while let Some(&c) = b_iter.peek() {
-                    if c.is_ascii_digit() {
-                        b_num_str.push(c);
-                        b_iter.next();
-                    } else {
-                        break;
+                    while let Some(&(_, c)) = b_chars.peek() {
+                        if c.is_ascii_digit() { b_chars.next(); } else { break; }
                     }
-                }
 
-                let a_trim = a_num_str.trim_start_matches('0');
-                let b_trim = b_num_str.trim_start_matches('0');
+                    let a_num_str = &a[a_start..a_chars.peek().map(|&(idx, _)| idx).unwrap_or(a.len())];
+                    let b_num_str = &b[b_start..b_chars.peek().map(|&(idx, _)| idx).unwrap_or(b.len())];
 
-                let cmp = a_trim
-                    .len()
-                    .cmp(&b_trim.len())
-                    .then_with(|| a_trim.cmp(b_trim))
-                    .then_with(|| a_num_str.len().cmp(&b_num_str.len()).reverse());
+                    let a_trim = a_num_str.trim_start_matches('0');
+                    let b_trim = b_num_str.trim_start_matches('0');
 
-                if cmp != std::cmp::Ordering::Equal {
-                    return cmp;
+                    let cmp = a_trim.len().cmp(&b_trim.len())
+                        .then_with(|| a_trim.cmp(b_trim))
+                        .then_with(|| a_num_str.len().cmp(&b_num_str.len()).reverse());
+
+                    if cmp != Ordering::Equal { return cmp; }
+                } else {
+                    let cmp = ac.to_ascii_lowercase().cmp(&bc.to_ascii_lowercase())
+                        .then_with(|| ac.cmp(&bc));
+
+                    if cmp != Ordering::Equal { return cmp; }
+                    a_chars.next();
+                    b_chars.next();
                 }
             }
-            (Some(ac), Some(bc)) => {
-                let cmp = ac
-                    .to_ascii_lowercase()
-                    .cmp(&bc.to_ascii_lowercase())
-                    .then_with(|| ac.cmp(&bc));
-                if cmp != std::cmp::Ordering::Equal {
-                    return cmp;
-                }
-                a_iter.next();
-                b_iter.next();
-            }
-            (Some(_), None) => return std::cmp::Ordering::Greater,
-            (None, Some(_)) => return std::cmp::Ordering::Less,
-            (None, None) => return std::cmp::Ordering::Equal,
+            (Some(_), None) => return Ordering::Greater,
+            (None, Some(_)) => return Ordering::Less,
+            (None, None) => return Ordering::Equal,
         }
     }
 }
