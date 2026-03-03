@@ -6,13 +6,10 @@ edition = "2024"
 [dependencies]
 image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 glob = "0.3"
-log = "0.4"
-env_logger = "0.11"
 rfd = "0.15"
 zip = "8.1.0"
 tempfile = "3.26.0"
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
 eframe = { version = "0.32.3", features = ["persistence"] }
 sevenz-rust = "0.6.1"
 unrar = "0.5.8"
