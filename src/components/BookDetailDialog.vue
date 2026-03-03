@@ -15,6 +15,7 @@
             class="book-detail-cover"
             :src="bookDetail.coverPath"
             @click="$emit('openContentView', bookDetail)"
+            @mousedown.middle.prevent="openLocalBook(bookDetail)"
             @contextmenu="$emit('openThumbnailView', bookDetail)"
           />
           <el-icon

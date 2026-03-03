@@ -253,6 +253,7 @@
     "BookDetail_NextBook": "Next Book",
     "BookDetail_NextRandomBook": "Next Random Book",
     "BookDetail_OpenInnerViewer": "Open Inner Viewer",
+    "BookDetail_OpenExternalViewer": "Open External Viewer",
     "BookDetail_DeleteBook": "Delete Book",
     "InnerViewer": "Inner Viewer",
     "InnerViewer_PreviousBook": "Previous Book",

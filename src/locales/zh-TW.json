@@ -253,6 +253,7 @@
     "BookDetail_NextBook": "下一本",
     "BookDetail_NextRandomBook": "下一本(隨機)",
     "BookDetail_OpenInnerViewer": "打開內置閱讀器",
+    "BookDetail_OpenExternalViewer": "打開外置閱讀器",
     "BookDetail_DeleteBook": "刪除漫畫",
     "BookDetail_CloseBookDetail": "關閉漫畫詳情",
     "InnerViewer": "內置閱讀器",
