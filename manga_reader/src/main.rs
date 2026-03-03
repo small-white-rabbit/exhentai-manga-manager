@@ -744,6 +744,7 @@ impl eframe::App for MangaReaderApp {
         let mut scroll_delta = 0.0;
         let mut requests_repaint = false;
 
+        let initial_page = self.current_page;
         let mut target_page = self.current_page;
 
         let screen_height = ctx.screen_rect().height();
@@ -1238,29 +1239,33 @@ impl eframe::App for MangaReaderApp {
             }
         });
 
-        if (self.view_mode == ViewMode::SinglePage || self.view_mode == ViewMode::DoublePage) && target_page != self.current_page {
+        if (self.view_mode == ViewMode::SinglePage || self.view_mode == ViewMode::DoublePage) && target_page != initial_page {
             let indices = self.get_current_page_indices(target_page);
-            let aligned_page = indices[0];
+            if !indices.is_empty() {
+                let aligned_page = indices[0];
 
-            let keep_min = aligned_page.saturating_sub(5);
-            let keep_max = aligned_page.saturating_add(6);
+                let keep_min = aligned_page.saturating_sub(5);
+                let keep_max = aligned_page.saturating_add(6);
 
-            let current_visible_range: HashSet<usize> = (keep_min..=keep_max).collect();
-            let to_remove: Vec<usize> = self.loaded_texture_indices.difference(&current_visible_range).copied().collect();
+                let current_visible_range: HashSet<usize> = (keep_min..=keep_max).collect();
+                let to_remove: Vec<usize> = self.loaded_texture_indices.difference(&current_visible_range).copied().collect();
 
-            for i in to_remove {
-                if i < self.images.len() {
-                    if let Some(uri) = self.get_image_uri(i) {
-                        ctx.forget_image(&uri);
+                for i in to_remove {
+                    if i < self.images.len() {
+                        if let Some(uri) = self.get_image_uri(i) {
+                            ctx.forget_image(&uri);
+                        }
                     }
+                    self.loaded_texture_indices.remove(&i);
                 }
-                self.loaded_texture_indices.remove(&i);
-            }
-            self.loaded_texture_indices.extend(current_visible_range.into_iter().filter(|&i| i < self.images.len()));
+                self.loaded_texture_indices.extend(current_visible_range.into_iter().filter(|&i| i < self.images.len()));
 
-            self.current_page = aligned_page;
-            requests_repaint = true;
-        } else if self.view_mode == ViewMode::Scroll && target_page != self.current_page {
+                self.current_page = aligned_page;
+                requests_repaint = true;
+            } else {
+                self.current_page = target_page;
+            }
+        } else if self.view_mode == ViewMode::Scroll && target_page != initial_page {
             self.current_page = target_page;
         }
 
