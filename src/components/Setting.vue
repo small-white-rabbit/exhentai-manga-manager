@@ -30,7 +30,12 @@
             <div class="setting-line">
               <el-input v-model="setting.imageExplorer" @change="saveSetting">
                 <template #prepend><span class="setting-label">{{$t('m.imageViewer')}}</span></template>
-                <template #append><el-button @click="selectImageExplorerPath">{{$t('m.select')}}</el-button></template>
+                <template #append>
+                  <el-button-group>
+                    <el-button :icon="MdRefresh" @click="resetImageExplorer" style="border-right: solid 1px"></el-button>
+                    <el-button @click="selectImageExplorerPath">{{$t('m.select')}}</el-button>
+                  </el-button-group>
+                </template>
               </el-input>
             </div>
           </el-col>
@@ -163,7 +168,7 @@
             >
               <template #item="{element}">
                 <el-tag :color="element.color" effect="dark" closable @close="removeTag(element.id)">
-                  {{element.letter}}:{{resolvedTranslation[element.tag]?.name || element.tag}}
+                  {{element.letter}}:{{resolvedTranslation[element.cat]?.[element.tag]?.name || element.tag}}
                 </el-tag>
               </template>
             </draggable>
@@ -431,6 +436,13 @@
               @change="saveSetting"
             />
           </el-col>
+          <el-col :span="6" class="setting-switch">
+            <el-switch
+              v-model="setting.closeToTray"
+              :active-text="$t('m.closeToTray')"
+              @change="saveSetting"
+            />
+          </el-col>
         </el-row>
       </el-tab-pane>
       <el-tab-pane :label="$t('m.accelerator')" name="accelerator">
@@ -556,6 +568,11 @@ const selectImageExplorerPath = () => {
   })
 }
 
+const resetImageExplorer = async () => {
+  setting.value.imageExplorer = await ipcRenderer.invoke('get-default-manga-reader')
+  saveSetting()
+}
+
 const loadTranslationFromEhTagTranslation = async () => {
   const resultObject = {}
   const translationCache = JSON.parse(localStorage.getItem('translationCache') || "{}")
@@ -564,12 +581,19 @@ const loadTranslationFromEhTagTranslation = async () => {
   await fetch('https://github.com/EhTagTranslation/Database/releases/latest/download/db.text.json')
   .then(res => res.json())
   .then(res => {
-    const sourceTranslationDatabase = res.data
-    _.forIn(sourceTranslationDatabase, cat => {
-      _.forIn(cat.data, (value, key) => {
-        resultObject[key] = _.pick(value, ['name', 'intro'])
+    const database = Array.isArray(res) ? res : (res.data || [])
+
+    database.forEach(namespaceObj => {
+      const namespace = namespaceObj.namespace
+      resultObject[namespace] = {}
+      if (namespaceObj.frontMatters) {
+        resultObject[namespace]._name = namespaceObj.frontMatters.name
+      }
+      _.forIn(namespaceObj.data, (value, key) => {
+        resultObject[namespace][key] = _.pick(value, ['name', 'intro'])
       })
     })
+
     resolvedTranslation.value = resultObject
     ipcRenderer.invoke('update-tag-translation', resultObject)
     localStorage.setItem('translationCache', JSON.stringify(resultObject))
@@ -680,9 +704,9 @@ const handleLanguageSet = async (languageCode) => {
   }
 }
 
-const saveSetting = () => {
+const saveSetting = _.debounce(() => {
   ipcRenderer.invoke('save-setting', _.cloneDeep(setting.value))
-}
+}, 500)
 
 const openLink = (link) => {
   ipcRenderer.invoke('open-url', link)
@@ -731,8 +755,8 @@ const formTagAdd = ref({
 const tagListForCollect = computed(() => {
   if (setting.value.showTranslation) {
     return tagListRaw.value.map(({letter, cat, tag, id}) => {
-      const labelHeader = cat === 'group' ? '团队' : resolvedTranslation.value[cat]?.name || cat
-      const labelTail = resolvedTranslation.value[tag]?.name || tag
+      const labelHeader = resolvedTranslation.value[cat]?._name || cat
+      const labelTail = resolvedTranslation.value[cat]?.[tag]?.name || tag
       return {
         label: `${labelHeader}:${labelTail} || ${letter}:"${tag}"$`,
         value: id

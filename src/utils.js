@@ -52,6 +52,7 @@ const acceleratorInfo = [
       'NextBook': 'PageDown',
       'NextRandomBook': 'Shift+PageDown',
       'OpenInnerViewer': 'Enter',
+      'OpenExternalViewer': "'",
       'DeleteBook': 'Delete',
     }
   },

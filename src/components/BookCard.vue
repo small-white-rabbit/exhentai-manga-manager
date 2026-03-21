@@ -30,7 +30,7 @@
         :color="tag.color"
         size="small"
         effect="dark"
-      >{{tag.letter}}:{{resolvedTranslation[tag.tag]?.name || tag.tag}}</el-tag>
+      >{{tag.letter}}:{{resolvedTranslation[tag.cat]?.[tag.tag]?.name || tag.tag}}</el-tag>
     </div>
     <div>
       <el-button-group class="outer-read-button-group">

@@ -77,9 +77,9 @@
                 <el-descriptions-item :label="$t('m.category')+':'">
                   <el-tag type="info" class="book-tag" @click="$emit('searchFromTag', book.category)">{{book.category}}</el-tag>
                 </el-descriptions-item>
-                <el-descriptions-item v-for="(tagArr, key) in book.tags" :label="key + ':'" :key="key">
+                <el-descriptions-item v-for="(tagArr, key) in book.tags" :label="resolvedTranslation[key]?._name || key + ':'" :key="key">
                   <el-tag type="info" class="book-tag" v-for="tag in tagArr" :key="tag" @click="$emit('searchFromTag', tag, key)"
-                  >{{resolvedTranslation[tag] ? resolvedTranslation[tag].name : tag }}</el-tag>
+                  >{{resolvedTranslation[key]?.[tag]?.name || tag }}</el-tag>
                 </el-descriptions-item>
               </el-descriptions>
             </el-popover>
@@ -135,6 +135,7 @@
     <el-divider content-position="left">{{$t('m.other')}}</el-divider>
     <el-space wrap class="book-tag-edit-buttons">
       <el-button type="primary" plain @click="groupGetMetadata">{{$t('m.batchGetMetadata')}}</el-button>
+      <el-button type="primary" plain @click="groupReGetMetadata">{{$t('m.reGetMetadata')}}</el-button>
       <el-button type="danger" plain @click="groupDeleteLocalBook">{{$t('m.deleteFile')}}</el-button>
       <el-button type="primary" plain @click="groupRescanBook">{{$t('m.rescan')}}</el-button>
       <el-button type="primary" plain @click="groupTriggerHiddenBook(false)">{{$t('m.showManga')}}</el-button>
@@ -517,6 +518,30 @@ const groupGetMetadata = async () => {
     console.error(error)
     updateTagsLoading.value = false
   }
+}
+
+const groupReGetMetadata = async () => {
+  ElMessageBox.confirm(
+    t('c.reGetMetadataWarning'),
+    '',
+    {}
+  )
+  .then(async () => {
+    try {
+      updateTagsLoading.value = true
+      const bookList = _.compact(selectBookList.value.map(id => _.find(displayBookList.value, { id })))
+      for (const book of bookList) {
+        book.url = ''
+        await saveBook(book)
+      }
+      emit('getBooksMetadata', bookList, setting.value.requireGap || 15000, () => {
+        updateTagsLoading.value = false
+      })
+    } catch (error) {
+      console.error(error)
+      updateTagsLoading.value = false
+    }
+  })
 }
 
 const groupDeleteLocalBook = () => {

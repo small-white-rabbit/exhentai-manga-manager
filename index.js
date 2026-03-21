@@ -19,7 +19,12 @@ const { globSync } = require('glob')
 const { prepareMangaModel, prepareMetadataModel } = require('./modules/database')
 const { prepareTemplate } = require('./modules/prepare_menu.js')
 const { getBookFilelist, geneCover, getImageListByBook, deleteImageFromBook } = require('./fileLoader/index.js')
-const { STORE_PATH, isPortable, TEMP_PATH, COVER_PATH, VIEWER_PATH, prepareSetting, prepareCollectionList, preparePath } = require('./modules/init_folder_setting.js')
+const {
+  STORE_PATH, isPortable,
+  TEMP_PATH, COVER_PATH, VIEWER_PATH,
+  prepareSetting, prepareCollectionList, preparePath,
+  _mange_reader
+} = require('./modules/init_folder_setting.js')
 const { findSameFile } = require('./fileLoader/folder.js')
 
 preparePath()
@@ -120,7 +125,7 @@ const createTray = () => {
     {
       label: 'exit',
       click: () => {
-        mainWindow.close()
+        mainWindow.destroy()
       }
     }
   ])
@@ -168,6 +173,14 @@ const createWindow = () => {
       }
     } else {
       win.show()
+    }
+  })
+  win.on('close', (event) => {
+    if (setting.closeToTray) {
+      event.preventDefault()
+      createTray()
+      win.hide()
+      win.setSkipTaskbar(true)
     }
   })
   win.on('minimize', (event) => {
@@ -670,7 +683,15 @@ ipcMain.handle('use-new-cover', async (event, filepath) => {
 })
 
 ipcMain.handle('open-local-book', async (event, filepath) => {
-  exec(`${setting.imageExplorer} "${filepath}"`)
+  if (setting.imageExplorer) {
+    exec(`${setting.imageExplorer} "${filepath}"`)
+  } else {
+    shell.openPath(filepath)
+  }
+})
+
+ipcMain.handle('get-default-manga-reader', async (event, arg) => {
+  return _mange_reader
 })
 
 ipcMain.handle('delete-local-book', async (event, filepath) => {
@@ -867,7 +888,7 @@ ipcMain.handle('save-setting', async (event, receiveSetting) => {
     })
   }
   setting = receiveSetting
-  if (tray && !setting.minimizeToTray) {
+  if (tray && !setting.minimizeToTray && !setting.closeToTray) {
     tray.destroy()
     tray = null
   }
@@ -1095,7 +1116,7 @@ function compareItems(a, b, sortKey, ascending = false) {
 // 格式化标签
 const formatTags = (tags) => {
   return Object.entries(tags)
-    .map(([key, values]) => values.map(value => setting.showTranslation ? `${key}:${tagTranslation?.[value]?.name ?? value}` : `${key}:${value}`).join(', '))
+    .map(([key, values]) => values.map(value => setting.showTranslation ? `${tagTranslation?.[key]?.name || key}:${tagTranslation?.[key]?.[value]?.name || value}` : `${key}:${value}`).join(', '))
     .join(', ')
 }
 

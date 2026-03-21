@@ -538,6 +538,8 @@ export default defineComponent({
         if (event.key === 'Enter') {
           event.preventDefault()
           this.$refs.InternalViewerRef.viewManga(this.bookDetail)
+        } else if (event.key === "'") {
+          this.$refs.BookDetailDialogRef.openLocalBook(this.bookDetail)
         } else if (event.key === 'Delete') {
           this.$refs.BookDetailDialogRef.deleteLocalBook(this.bookDetail)
         } else if (event.key === 'PageDown') {
