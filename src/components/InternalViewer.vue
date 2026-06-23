@@ -436,9 +436,9 @@ const flushPendingThumbnails = () => {
   pendingThumbnails.length = 0
 }
 
-const RANGE_CHUNK_SIZE = 50
+const RANGE_CHUNK_SIZE = 100
 
-const requestImageRange = (start, end) => {
+const flushImageRangeRequest = (start, end) => {
   const len = imageMetadata.value.length
   if (len === 0) return
   const startIndex = Math.max(0, start)
@@ -451,11 +451,41 @@ const requestImageRange = (start, end) => {
   ipcRenderer.invoke('load-manga-image-range', chunkStart, chunkEnd)
 }
 
+// Debounced range request used by scrolling: only load nearby images after the scroll settles.
+let pendingRangeRequest = null
+let rangeRequestTimer = null
+
+const requestImageRange = (start, end) => {
+  if (!pendingRangeRequest) {
+    pendingRangeRequest = { start, end }
+  } else {
+    pendingRangeRequest.start = Math.min(pendingRangeRequest.start, start)
+    pendingRangeRequest.end = Math.max(pendingRangeRequest.end, end)
+  }
+  if (rangeRequestTimer) clearTimeout(rangeRequestTimer)
+  rangeRequestTimer = setTimeout(() => {
+    const req = pendingRangeRequest
+    pendingRangeRequest = null
+    rangeRequestTimer = null
+    if (req) flushImageRangeRequest(req.start, req.end)
+  }, 50)
+}
+
+// Immediate range request for explicit navigation (open, thumbnail click, page turn).
+const requestImageRangeImmediate = (start, end) => {
+  if (rangeRequestTimer) {
+    clearTimeout(rangeRequestTimer)
+    rangeRequestTimer = null
+  }
+  pendingRangeRequest = null
+  flushImageRangeRequest(start, end)
+}
+
 const requestAroundIndex = (index, radius = 5) => {
   if (!imageMetadata.value.length) return
   const start = Math.max(0, index - radius)
   const end = Math.min(imageMetadata.value.length - 1, index + radius)
-  requestImageRange(start, end)
+  requestImageRangeImmediate(start, end)
 }
 
 onMounted(() => {
@@ -563,7 +593,7 @@ const viewManga = (book, viewerHeight = '100%') => {
     totalPage.value = total
     const isComicRead = setting.value.viewerType === 'comicread'
     if (isComicRead || total <= 20) {
-      requestImageRange(0, total - 1)
+      requestImageRangeImmediate(0, total - 1)
     } else {
       let startIndex = 0
       if (setting.value.keepReadingProgress) {
@@ -853,9 +883,10 @@ const updateVirtualScroll = () => {
   const bottomPadding = totalHeight - (offsets[endIndex] + heights[endIndex])
   scrollVirtualState.value = { startIndex, endIndex: endIndex + 1, topPadding, bottomPadding }
 
-  // Request images for the visible window (plus a larger preload buffer).
-  const preloadStart = Math.max(0, startIndex - 30)
-  const preloadEnd = Math.min(len - 1, endIndex + 30)
+  // Request images for the visible window (plus a 100-image preload buffer).
+  // During fast scrolling this is debounced, so only the final viewport gets loaded.
+  const preloadStart = Math.max(0, startIndex - 50)
+  const preloadEnd = Math.min(len - 1, endIndex + 50)
   requestImageRange(preloadStart, preloadEnd)
 }
 
@@ -1040,6 +1071,11 @@ const useScreenshotAsCover = async (imageId) => {
 
 const handleStopReadManga = () => {
   if (setting.value.keepReadingProgress) saveReadingProgress()
+  if (rangeRequestTimer) {
+    clearTimeout(rangeRequestTimer)
+    rangeRequestTimer = null
+  }
+  pendingRangeRequest = null
   ipcRenderer.invoke('release-sendimagelock')
   ipcRenderer.invoke('update-window-title')
 }
@@ -1135,7 +1171,7 @@ watch(showViewerSide, () => {
 
 watch(showThumbnail, (val) => {
   if (val && imageMetadata.value.length > 0) {
-    requestImageRange(0, imageMetadata.value.length - 1)
+    requestImageRangeImmediate(0, imageMetadata.value.length - 1)
   }
 })
 

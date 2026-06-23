@@ -1257,8 +1257,8 @@ ipcMain.handle('load-manga-image-list', async (event, book) => {
 })
 
 // Process images concurrently; keep CPU/disk pressure reasonable.
-const imageProcessLimiter = createLimiter(4)
-const thumbnailProcessLimiter = createLimiter(2)
+const imageProcessLimiter = createLimiter(8)
+const thumbnailProcessLimiter = createLimiter(4)
 
 ipcMain.handle('load-manga-image-range', async (event, start, end) => {
   if (!currentViewerSession || !sendImageLock) return
