@@ -233,7 +233,7 @@
 </template>
 
 <script>
-import { defineComponent } from 'vue'
+import { defineComponent, toRaw } from 'vue'
 import { Setting as SettingIcon, FullScreen, Edit } from '@element-plus/icons-vue'
 import { ArrowTrendingLines20Filled, Collections24Regular, Search32Filled, Save16Regular } from '@vicons/fluent'
 import { MdShuffle, MdRefresh, MdCodeDownload, MdExit } from '@vicons/ionicons4'
@@ -287,6 +287,7 @@ export default defineComponent({
       buttonLoadBookListLoading: false,
       buttonGetMetadatasLoading: false,
       actionHistory: [],
+      dbSignature: {},
       // collection
       drawerVisibleCollection: false,
       openCollectionTitle: undefined,
@@ -351,11 +352,23 @@ export default defineComponent({
     .then(async (res) => {
       this.setting = res
       if (this.setting.loadOnStart) {
-        // display exist books first then load new books
-        await this.loadBookList()
-        this.loadBookList(true)
+        // skip cache and rescan all libraries
+        await this.loadBookList(true)
       } else {
-        this.loadBookList()
+        const cacheRes = await this.loadCache()
+        if (!cacheRes.ok) {
+          // we don't check book existence here
+          await this.loadBookList()
+        }
+      }
+    })
+    ipcRenderer.on('app-cache:request-bookList-snap', () => {
+      try {
+        const raw = toRaw(this.bookList)
+        const snap = JSON.parse(JSON.stringify(raw))
+        ipcRenderer.send('app-cache:reply-snap', snap)
+      } catch (err) {
+        console.log('app-cache:request-bookList-snap error:', err)
       }
     })
     this.sortValue = localStorage.getItem('sortValue')
@@ -480,22 +493,14 @@ export default defineComponent({
         }
       }
       if (currentUIValue === 'viewer-content' || currentUIValue === 'viewer-thumbnail') {
-        if (event.key === 'PageDown') {
-          if (event.shiftKey) {
-            this.toNextMangaRandom()
-          } else {
-            this.toNextManga(1)
-          }
-        } else if (event.key === 'PageUp') {
-          this.toNextManga(-1)
-        } else if (event.key === '=') {
+        if (event.key === '=') {
           this.$refs.InternalViewerRef.showThumbnail = !this.$refs.InternalViewerRef.showThumbnail
         }
         if (currentUIValue === 'viewer-content') {
           if (this.$refs.InternalViewerRef.imageStyleType === 'single' || this.$refs.InternalViewerRef.imageStyleType === 'double') {
-            if (event.key === next || event.key === 'ArrowDown' || event.key === ' ') {
+            if (event.key === next || event.key === 'ArrowDown' || event.key === ' ' || event.key === 'PageDown') {
               this.$refs.InternalViewerRef.currentImageIndex += 1
-            } else if (event.key === prev || event.key === 'ArrowUp') {
+            } else if (event.key === prev || event.key === 'ArrowUp' || event.key === 'PageUp') {
               this.$refs.InternalViewerRef.currentImageIndex -= 1
             } else if (event.key === 'Home') {
               this.$refs.InternalViewerRef.currentImageIndex = 0
@@ -513,13 +518,13 @@ export default defineComponent({
               }
             }
           } else if (this.$refs.InternalViewerRef.imageStyleType === 'scroll') {
-            if (event.key === prev || event.key === 'ArrowUp') {
+            if (event.key === prev || event.key === 'ArrowUp' || event.key === 'PageUp') {
               if (event.ctrlKey) {
                 document.querySelector('.viewer-drawer .el-drawer__body').scrollBy(0, - window.innerHeight / 10)
               } else {
                 document.querySelector('.viewer-drawer .el-drawer__body').scrollBy(0, - window.innerHeight / 1.2)
               }
-            } else if (event.key === next || event.key === 'ArrowDown' || event.key === ' ') {
+            } else if (event.key === next || event.key === 'ArrowDown' || event.key === ' ' || event.key === 'PageDown') {
               if (event.ctrlKey) {
                 document.querySelector('.viewer-drawer .el-drawer__body').scrollBy(0, window.innerHeight / 10)
               } else {
@@ -616,11 +621,28 @@ export default defineComponent({
         document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))
         // clear search result when at home page
         if (currentUIValue === 'home') {
-          this.handleSearchStringChange()
-          this.$refs.FolderTreeRef.resetSelect()
+          if (this.currentPage === 1) {
+            this.handleSearchStringChange()
+            this.$refs.FolderTreeRef.resetSelect()
+          } else {
+            this.currentPage -= 1
+            this.handleCurrentPageChange(this.currentPage)
+          }
+        } else if (this.$refs.BookDetailDialogRef.dialogVisibleBookDetail &&
+            !this.$refs.SearchDialogRef.dialogVisibleEhSearch) {
+          // close the book detail dialog by mouse backward button
+          this.$refs.BookDetailDialogRef.dialogVisibleBookDetail = false
         }
       } else if (event.button === 4) {
-        if (currentUIValue !== 'viewer-content' && currentUIValue !== 'viewer-thumbnail' && currentUIValue !== 'viewer-comicread') {
+        if (currentUIValue === 'home') {
+          if (this.currentPage * this.setting.pageSize < this.displayBookCount) {
+            this.currentPage += 1
+            this.handleCurrentPageChange(this.currentPage)
+          }
+        } else if (currentUIValue === 'bookdetail' && !this.$refs.SearchDialogRef.dialogVisibleEhSearch) {
+          // open the next book by mouse forward button
+          this.jumpMangeDetail(1)
+        } else if (currentUIValue !== 'viewer-content' && currentUIValue !== 'viewer-thumbnail' && currentUIValue !== 'viewer-comicread') {
           this.revertAction()
         }
       }
@@ -673,11 +695,40 @@ export default defineComponent({
         this.$refs.FolderTreeRef.resetSelect()
         this.$refs.EditViewRef.selectBookList = []
         this.buttonLoadBookListLoading = false
+        await this.pushAppCache()
       } catch (error) {
         this.buttonLoadBookListLoading = false
         console.error(error)
       }
       if (scan) this.printMessage('success', this.$t('c.scanComplete'))
+    },
+    async loadCache () {
+      try {
+        const { ok, appCache } = await ipcRenderer.invoke('app-cache:load-verify-cache')
+        if (ok) {
+          const data = appCache.data
+          this.bookList = this.prepareBookList(data.bookList || [])
+          this.dbSignature = appCache.dbSignature
+          this.handleSortChange(this.sortValue, this.bookList)
+          this.$refs.EditViewRef.selectBookList = []
+          await this.pushAppCache()
+          console.log('cached loaded')
+          return { ok: true, dbSignature: appCache.dbSignature }
+        } else {
+          console.log('Database changed, skip cache')
+          return { ok: false, dbSignature: {} }
+        }
+      } catch (e) {
+        console.log('Error loading cache', e)
+        return { ok: false, dbSignature: {} }
+      }
+    },
+    pushAppCache () {
+      const appCache = {
+        data: {},
+        dbSignature: this.dbSignature
+      }
+      ipcRenderer.send('app-cache::update-cache', JSON.parse(JSON.stringify(appCache)))
     },
     prepareBookList (bookList) {
       bookList.forEach(book => {

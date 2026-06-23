@@ -11,11 +11,19 @@
       <el-tab-pane :label="$t('m.general')" name="general">
         <el-row :gutter="8">
           <el-col :span="24">
-            <div class="setting-line">
-              <el-input v-model="setting.library">
-                <template #prepend><span class="setting-label">{{$t('m.library')}}</span></template>
-                <template #append><el-button @click="selectLibraryPath">{{$t('m.select')}}</el-button></template>
-              </el-input>
+            <div class="setting-line libraries-list">
+              <div v-for="(lib, idx) in (setting.libraries || [])" :key="idx" class="library-row">
+                <el-input v-model="setting.libraries[idx]">
+                  <template #prepend><span class="setting-label">{{$t('m.library')}} {{idx + 1}}</span></template>
+                  <template #append>
+                    <el-button-group>
+                      <el-button @click="selectLibraryPath(idx)">{{$t('m.select')}}</el-button>
+                      <el-button :icon="Delete" @click="removeLibraryPath(idx)"></el-button>
+                    </el-button-group>
+                  </template>
+                </el-input>
+              </div>
+              <el-button plain @click="addLibraryPath">{{$t('m.addLibrary')}}</el-button>
             </div>
           </el-col>
           <el-col :span="24">
@@ -288,6 +296,20 @@
               </el-input>
             </div>
           </el-col>
+          <el-col :span="12">
+            <div class="setting-line">
+              <el-input v-model.number="setting.concurrentScan" :placeholder="$t('m.concurrentScanInfo')" @change="saveSetting">
+                <template #prepend><span class="setting-label">{{$t('m.concurrentScan')}}</span></template>
+              </el-input>
+            </div>
+          </el-col>
+          <el-col :span="12">
+            <div class="setting-line">
+              <el-input v-model.number="setting.concurrentWrite" :placeholder="$t('m.concurrentWriteInfo')" @change="saveSetting">
+                <template #prepend><span class="setting-label">{{$t('m.concurrentWrite')}}</span></template>
+              </el-input>
+            </div>
+          </el-col>
           <el-col :span="24">
             <div class="setting-line">
               <el-input v-model="setting.folderTreeWidth" :placeholder="$t('m.folderTreeWidthInfo')" @change="saveSetting">
@@ -348,6 +370,11 @@
           <el-col :span="5">
             <div class="setting-line">
               <el-button class="function-button" type="primary" plain @click="importMetadataFromSqlite">{{$t('m.importMetadataFromSqlite')}}</el-button>
+            </div>
+          </el-col>
+          <el-col :span="5">
+            <div class="setting-line">
+              <el-button class="function-button" type="danger" plain @click="removeMissingRecords">{{$t('m.removeMissingRecords')}}</el-button>
             </div>
           </el-col>
         </el-row>
@@ -494,6 +521,7 @@ import { useI18n } from 'vue-i18n'
 import { ElMessageBox } from 'element-plus'
 import draggable from 'vuedraggable'
 import { MdRefresh } from '@vicons/ionicons4'
+import { Delete } from '@element-plus/icons-vue'
 
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 import zhTw  from 'element-plus/dist/locale/zh-tw.mjs'
@@ -528,6 +556,14 @@ onMounted(() => {
       if (res.defaultScraper === undefined) setting.value.defaultScraper = 'exhentai'
       if (res.defaultInsertEmptyPage === undefined) setting.value.defaultInsertEmptyPage = true
       if (res.viewerType === undefined) setting.value.viewerType = 'original'
+      if (!Array.isArray(setting.value.libraries)) {
+        const legacy = setting.value.library || setting.value.libraries
+        setting.value.libraries = legacy ? [legacy] : []
+        delete setting.value.library
+      }
+      if (setting.value.concurrentScan === undefined) setting.value.concurrentScan = 4
+      if (setting.value.concurrentWrite === undefined) setting.value.concurrentWrite = 2
+      if (setting.value.excludeFile === undefined) setting.value.excludeFile = ''
       saveSetting()
 
       // default action
@@ -540,14 +576,31 @@ onMounted(() => {
     })
 })
 
-const selectLibraryPath = () => {
+const selectLibraryPath = (idx) => {
   ipcRenderer.invoke('select-folder', t('m.library'))
   .then(res => {
     if (res) {
-      setting.value.library = res
+      if (!Array.isArray(setting.value.libraries)) {
+        setting.value.libraries = []
+      }
+      setting.value.libraries[idx] = res
       saveSetting()
     }
   })
+}
+
+const addLibraryPath = () => {
+  if (!Array.isArray(setting.value.libraries)) {
+    setting.value.libraries = []
+  }
+  setting.value.libraries.push('')
+  saveSetting()
+}
+
+const removeLibraryPath = (idx) => {
+  if (!Array.isArray(setting.value.libraries)) return
+  setting.value.libraries.splice(idx, 1)
+  saveSetting()
 }
 
 const selectMetadataPath = () => {
@@ -747,6 +800,28 @@ const importMetadataFromSqlite = async () => {
   }
 }
 
+const removeMissingRecords = async () => {
+  try {
+    const { totalRows, missingFileCount, missingCoverCount } = await ipcRenderer.invoke('remove-missing-records')
+    const message = t('m.confirmRemoveIntro') + '\n\n' +
+      t('m.totalRows') + ': ' + totalRows + '\n' +
+      t('m.missingFilesToRemove') + ': ' + missingFileCount + '\n' +
+      t('m.unrefCoversToDelete') + ': ' + missingCoverCount
+    await ElMessageBox.confirm(message, t('m.confirmRemoveTitle'), {
+      confirmButtonText: t('c.confirm'),
+      cancelButtonText: t('c.cancel'),
+      type: 'warning'
+    })
+    const { removedFiles, removedCovers } = await ipcRenderer.invoke('remove-missing-records', { confirm: true, vacuum: true })
+    emit('loadBookList')
+    printMessage('success', t('c.removeMissingRecordsMessage', { removedFiles, removedCovers }))
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.log(error)
+    }
+  }
+}
+
 const formTagAdd = ref({
   tag: null,
   color: '#42A5F5'
@@ -862,4 +937,9 @@ defineExpose({
     max-height: 70vh
     overflow-y: auto
     padding-right: 10px
+.libraries-list
+  .library-row
+    margin-bottom: 8px
+  .el-button
+    margin-top: 4px
 </style>

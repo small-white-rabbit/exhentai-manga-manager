@@ -73,8 +73,40 @@ const getImageListFromZip = async (filepath, VIEWER_PATH) => {
   }))
 }
 
+const getImageListFromZipFast = async (filepath) => {
+  const zip = new AdmZip(filepath)
+  const entries = zip.getEntries()
+  let list = entries
+    .filter(e => !e.isDirectory)
+    .map(e => e.entryName)
+    .filter(p => _.includes(['.jpg', '.jpeg', '.png', '.webp', '.avif', '.gif'], path.extname(p).toLowerCase()))
+  list = _.filter(list, s => !_.includes(s, '__MACOSX'))
+  list = list.sort((a, b) => a.localeCompare(b, undefined, {numeric: true, sensitivity: 'base'}))
+  return list.map((innerPath, i) => ({
+    relativePath: innerPath,
+    absolutePath: innerPath,
+    archivePath: filepath,
+    innerPath,
+    index: i
+  }))
+}
+
+const extractZipImageToFile = async (filepath, innerPath, VIEWER_PATH) => {
+  const zip = new AdmZip(filepath)
+  const entry = _.find(zip.getEntries(), e => e.entryName === innerPath)
+  if (!entry) throw new Error('zip entry not found: ' + innerPath)
+  const tempFolder = path.join(VIEWER_PATH, nanoid(8))
+  await fs.promises.mkdir(tempFolder, { recursive: true })
+  const outputPath = path.join(tempFolder, path.basename(innerPath))
+  // maintainEntryPath=false to drop folder structure and extract directly into tempFolder
+  zip.extractEntryTo(entry, tempFolder, false, true)
+  return outputPath
+}
+
 module.exports = {
   getZipFilelist,
   solveBookTypeZip,
-  getImageListFromZip
+  getImageListFromZip,
+  getImageListFromZipFast,
+  extractZipImageToFile
 }

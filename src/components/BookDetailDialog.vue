@@ -11,9 +11,14 @@
     <el-row :gutter="20" class="book-detail-card">
       <el-col :span="6">
         <el-row class="book-detail-function book-detail-cover-frame">
+          <div v-if="coverLoading" class="book-detail-cover-placeholder">
+            <el-icon class="is-loading" :size="32"><Loading /></el-icon>
+          </div>
           <img
             class="book-detail-cover"
             :src="bookDetail.coverPath"
+            @load="coverLoading = false"
+            @error="coverLoading = false"
             @click="$emit('openContentView', bookDetail)"
             @mousedown.middle.prevent="openLocalBook(bookDetail)"
             @contextmenu="$emit('openThumbnailView', bookDetail)"
@@ -146,11 +151,12 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessageBox } from 'element-plus'
 import { CaretRight20Regular, CaretLeft20Regular } from '@vicons/fluent'
 import { BookmarkTwotone } from '@vicons/material'
+import { Loading } from '@element-plus/icons-vue'
 import { nanoid } from 'nanoid'
 import he from 'he'
 import * as linkify from 'linkifyjs'
@@ -192,10 +198,16 @@ const emit = defineEmits([
 ])
 
 const dialogVisibleBookDetail = ref(false)
+const coverLoading = ref(false)
+
+watch(bookDetail, () => {
+  coverLoading.value = true
+}, { flush: 'post' })
 
 const openBookDetail = (book, addToHistory = true) => {
   bookDetail.value = book
   dialogVisibleBookDetail.value = true
+  coverLoading.value = true
   comments.value = []
   if (setting.value.showComment) getComments(book.url)
   if (addToHistory) emit('addToHistory', book.id)
@@ -463,6 +475,16 @@ defineExpose({
       height: 354px
       object-fit: cover
       border-radius: 4px
+    .book-detail-cover-placeholder
+      position: absolute
+      width: 250px
+      height: 354px
+      display: flex
+      align-items: center
+      justify-content: center
+      background-color: var(--el-fill-color-light)
+      border-radius: 4px
+      z-index: 1
     .next-manga-pane, .prev-manga-pane
       position: absolute
       bottom: 80px

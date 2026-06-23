@@ -35,6 +35,7 @@ const { setting, bookList, pathSep, folderTreeData } = storeToRefs(appStore)
 const emit = defineEmits(['chunkList'])
 
 const sideVisibleFolderTree = ref(false)
+let dirIndex = { keys: [], idxs: [] }
 
 const openFolderTree = () => {
   sideVisibleFolderTree.value = !sideVisibleFolderTree.value
@@ -42,17 +43,178 @@ const openFolderTree = () => {
     geneFolderTree()
   }
 }
+
+// Normalize path to POSIX style '/' and lowercase Windows drive letter
+function normDir (p) {
+  let s = String(p || '').replace(/[\\/]+/g, '/')
+  if (s.length > 1 && s.endsWith('/')) s = s.slice(0, -1)
+  if (/^[A-Za-z]:/.test(s)) s = s.toLowerCase()
+  return s
+}
+
+// Build folder tree with trie + collapse single-child chains
+function buildFolderTree (bookPathList) {
+  const makeNode = (name, folderPath) => ({
+    label: name,
+    folderName: name,
+    folderPath,
+    hasDirect: false,
+    _children: new Map()
+  })
+
+  const rootMap = new Map()
+  for (const it of bookPathList || []) {
+    const fp = normDir(it)
+    if (!fp) continue
+
+    const parts = fp.split('/')
+    const dirs = parts.slice(0, -1).filter(Boolean)
+    if (!dirs.length) continue
+
+    let cursor = rootMap
+    let accum = []
+    for (let i = 0; i < dirs.length; i++) {
+      const seg = dirs[i]
+      accum.push(seg)
+      let node = cursor.get(seg)
+      if (!node) {
+        node = makeNode(seg, accum.join('/'))
+        cursor.set(seg, node)
+      }
+      if (i === dirs.length - 1) {
+        node.hasDirect = true
+      }
+      cursor = node._children
+    }
+  }
+
+  const collapseOne = (node) => {
+    let n = node
+    while (!n.hasDirect && n._children.size === 1) {
+      const [, onlyChild] = n._children.entries().next().value
+      n = onlyChild
+    }
+    return n
+  }
+
+  const topMap = new Map()
+  for (const [, topNode] of rootMap) {
+    const collapsed = collapseOne(topNode)
+    topMap.set(collapsed.folderPath, collapsed)
+  }
+
+  const toArray = (map, isTop) => {
+    const arr = []
+    for (const [, n] of map) {
+      arr.push({
+        label: isTop ? n.folderPath : n.folderName,
+        folderPath: n.folderPath,
+        children: toArray(n._children, false)
+      })
+    }
+    arr.sort((a, b) =>
+      (isTop ? a.folderPath : a.label).localeCompare(isTop ? b.folderPath : b.label, undefined,
+        { numeric: true, sensitivity: 'base' })
+    )
+    return arr
+  }
+
+  return toArray(topMap, true)
+}
+
+function getLibraryPrefixes () {
+  const libs = Array.isArray(setting.value.libraries)
+    ? setting.value.libraries.filter(Boolean)
+    : [setting.value.library].filter(Boolean)
+  return libs.map(normDir)
+}
+
+function findLibraryPrefix (dir, prefixes) {
+  for (const prefix of prefixes) {
+    if (dir.startsWith(prefix)) return prefix
+  }
+  return null
+}
+
+function buildDirIndex (bookList) {
+  const keys = []
+  const idxs = []
+  const libraryPrefixes = getLibraryPrefixes()
+  for (let i = 0; i < bookList.length; i++) {
+    const b = bookList[i]
+    if (b.isCollection) continue
+    const p = normDir(b.filepath)
+    const j = p.lastIndexOf('/')
+    const dir = j >= 0 ? p.slice(0, j) : ''
+    // store path relative to its library root for consistent prefix matching
+    const prefix = findLibraryPrefix(dir, libraryPrefixes)
+    const relativeDir = prefix
+      ? dir.slice(prefix.length).replace(/^\//, '')
+      : dir
+    keys.push(relativeDir)
+    idxs.push(i)
+  }
+
+  const order = keys.map((_, i) => i).sort((a, b) => {
+    const ka = keys[a], kb = keys[b]
+    return ka < kb ? -1 : ka > kb ? 1 : 0
+  })
+
+  const sKeys = new Array(order.length)
+  const sIdxs = new Array(order.length)
+  for (let k = 0; k < order.length; k++) {
+    const i = order[k]
+    sKeys[k] = keys[i]
+    sIdxs[k] = idxs[i]
+  }
+  return { keys: sKeys, idxs: sIdxs }
+}
+
+function lowerBound (keys, key) {
+  let lo = 0, hi = keys.length
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    if (keys[mid] < key) lo = mid + 1
+    else hi = mid
+  }
+  return lo
+}
+
+function upperBound (keys, key) {
+  let lo = 0, hi = keys.length
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    if (keys[mid] <= key) lo = mid + 1
+    else hi = mid
+  }
+  return lo
+}
+
+function computeRange (keys, folderPath) {
+  const loKey = normDir(folderPath)
+  const hiKey = loKey + '/\uFFFF\uFFFF'
+  return [lowerBound(keys, loKey), upperBound(keys, hiKey)]
+}
+
 const geneFolderTree = async () => {
   const bList = _.filter(bookList.value, book => !book.isCollection)
   const filePathList = bList.map(book => book.filepath)
-  folderTreeData.value = await ipcRenderer.invoke('get-folder-tree', filePathList)
+  folderTreeData.value = buildFolderTree(filePathList)
+  dirIndex = buildDirIndex(bookList.value)
 }
+
 const selectFolderTreeNode = async (selectNode) => {
-  if (selectNode.folderPath) {
-    const clickLibraryPath = setting.value.library + pathSep.value + selectNode.folderPath + pathSep.value
-    bookList.value.map(book => book.folderHide = !book.filepath.startsWith(clickLibraryPath))
+  if (!selectNode?.folderPath) {
+    bookList.value.forEach(book => { book.folderHide = false })
   } else {
-    bookList.value.map(book => book.folderHide = false)
+    bookList.value.forEach(book => { book.folderHide = true })
+    if (!selectNode._range) {
+      selectNode._range = computeRange(dirIndex.keys, selectNode.folderPath)
+    }
+    const [lo, hi] = selectNode._range
+    for (let i = lo; i < hi; i++) {
+      bookList.value[dirIndex.idxs[i]].folderHide = false
+    }
   }
   emit('chunkList')
 }
@@ -85,6 +247,7 @@ const filterTreeNode = (val, data) => {
 
 const resetSelect = () => {
   treeRef.value && treeRef.value.setCurrentKey('')
+  bookList.value.forEach(book => { book.folderHide = false })
 }
 
 defineExpose({

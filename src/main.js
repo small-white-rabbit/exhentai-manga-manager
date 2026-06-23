@@ -21,6 +21,13 @@ const messages = {
 const app = createApp(App)
 
 window._ = _
+// expose preload APIs as globals for legacy components in dev mode
+if (window.ipcRenderer && !globalThis.ipcRenderer) {
+  globalThis.ipcRenderer = window.ipcRenderer
+}
+if (window.electronFunction && !globalThis.electronFunction) {
+  globalThis.electronFunction = window.electronFunction
+}
 
 const pinia = createPinia()
 app.use(pinia)

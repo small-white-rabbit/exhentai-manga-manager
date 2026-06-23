@@ -1,7 +1,7 @@
 const path = require('path')
 const { globIterate, globSync } = require('glob')
 const { nanoid } = require('nanoid')
-const { readdir, stat } = require('fs/promises')
+const { readdir, stat, readFile } = require('fs/promises')
 const { shell } = require('electron')
 const fs = require('fs')
 const { Op } = require("sequelize")
@@ -109,10 +109,35 @@ const findSameFile = async (filepath, type, Manga) => {
   }
 }
 
+async function solveBookTypeFolderInMem(folderpath) {
+  let list = globSync('*.@(jpg|jpeg|png|webp|avif|gif|bmp)', {
+    cwd: folderpath,
+    nocase: true,
+  })
+  list = list
+    .filter((n) => !n.startsWith('__MACOSX/') && !n.startsWith('._'))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
+    .map((f) => path.join(folderpath, f))
+  const pageCount = list.length
+  const [folderStat, bundleSize] = await Promise.all([
+    stat(folderpath).catch(() => null),
+    dirSize(folderpath).catch(() => 0),
+  ])
+  if (pageCount === 0) {
+    return { targetBuffer: null, coverBuffer: null, pageCount, bundleSize, mtime: folderStat?.mtime || null }
+  }
+  const coverFile = list[0]
+  const targetFile = pageCount > 8 ? list[7] : list[0]
+  let coverBuffer = await readFile(coverFile)
+  let targetBuffer = targetFile === coverFile ? coverBuffer : await readFile(targetFile)
+  return { targetBuffer, coverBuffer, pageCount, bundleSize, mtime: folderStat?.mtime || null }
+}
+
 module.exports = {
   getFolderlist,
   solveBookTypeFolder,
   getImageListFromFolder,
   deleteImageFromFolder,
-  findSameFile
+  findSameFile,
+  solveBookTypeFolderInMem
 }

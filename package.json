@@ -59,6 +59,7 @@
     "glob": "^10.3.3",
     "https-proxy-agent": "^7.0.2",
     "lodash": "^4.17.21",
+    "msgpackr": "^2.0.4",
     "nanoid": "^3.3.2",
     "node-fetch": "^2.7.0",
     "sequelize": "^6.32.1",

@@ -4,6 +4,7 @@ const fs = require('fs')
 const { brotliDecompress } = require('zlib')
 const { promisify, format } = require('util')
 const _ = require('lodash')
+const { QueryTypes } = require('sequelize')
 const { nanoid } = require('nanoid')
 const sharp = require('sharp')
 const { exec } = require('child_process')
@@ -15,10 +16,12 @@ const { HttpsProxyAgent } = require('https-proxy-agent')
 const windowStateKeeper = require('electron-window-state')
 const express = require('express')
 const { globSync } = require('glob')
+const { performance } = require('node:perf_hooks')
 
-const { prepareMangaModel, prepareMetadataModel } = require('./modules/database')
+const { prepareMangaModel, prepareMetadataModel, ensureMetaTable, installRevTriggers } = require('./modules/database')
 const { prepareTemplate } = require('./modules/prepare_menu.js')
-const { getBookFilelist, geneCover, getImageListByBook, deleteImageFromBook } = require('./fileLoader/index.js')
+const { getBookFilelist, geneCoverFromBuffer, getImageListByBook, getImageListByBookFast, extractImageByBook, deleteImageFromBook } = require('./fileLoader/index.js')
+const { saveAppCache, LoadVerifyCache } = require('./src/services/appCache.js')
 const {
   STORE_PATH, isPortable,
   TEMP_PATH, COVER_PATH, VIEWER_PATH,
@@ -26,10 +29,14 @@ const {
   _mange_reader
 } = require('./modules/init_folder_setting.js')
 const { findSameFile } = require('./fileLoader/folder.js')
+const { makeShardedPath } = require('./fileLoader/utils.js')
 
 preparePath()
 let setting = prepareSetting()
 let collectionList = prepareCollectionList()
+
+const APP_CACHE_PATH = path.join(STORE_PATH, 'cache', 'appCache.snap')
+let latestAppCache = { data: {}, dbSignature: {} }
 
 const Manga = prepareMangaModel(path.join(STORE_PATH, './database.sqlite'))
 let metadataSqliteFile
@@ -45,6 +52,11 @@ const getColumns = async (sequelize, tableName) => {
   return results.map(column => column.name)
 }
 ;(async () => {
+  await Manga.sequelize.query(`PRAGMA journal_mode=WAL;`)
+  await Manga.sequelize.query(`PRAGMA busy_timeout=10000;`)
+  await Metadata.sequelize.query(`PRAGMA journal_mode=WAL;`)
+  await Metadata.sequelize.query(`PRAGMA busy_timeout=10000;`)
+
   const columns = await getColumns(Manga.sequelize, 'Mangas')
   if (['hiddenBook', 'readCount'].some(c => !columns.includes(c))) {
     await Manga.sync({ alter: true })
@@ -52,6 +64,12 @@ const getColumns = async (sequelize, tableName) => {
     await Manga.sync()
   }
   await Metadata.sync()
+
+  // add meta table and revision triggers for startup cache invalidation
+  await ensureMetaTable(Manga.sequelize)
+  await installRevTriggers(Manga.sequelize, 'Mangas', 'mm')
+  await ensureMetaTable(Metadata.sequelize)
+  await installRevTriggers(Metadata.sequelize, 'Metadata', 'mm')
 })()
 
 const logFile = fs.createWriteStream(path.join(STORE_PATH, 'log.txt'), { flags: 'w' })
@@ -86,6 +104,11 @@ let mainWindow
 let tray
 let screenWidth
 let sendImageLock = false
+let isQuitting = false
+
+app.on('before-quit', () => {
+  isQuitting = true
+})
 
 const createTray = () => {
   if (tray) return
@@ -125,7 +148,8 @@ const createTray = () => {
     {
       label: 'exit',
       click: () => {
-        mainWindow.destroy()
+        isQuitting = true
+        mainWindow.close()
       }
     }
   ])
@@ -175,13 +199,36 @@ const createWindow = () => {
       win.show()
     }
   })
-  win.on('close', (event) => {
-    if (setting.closeToTray) {
+  win.on('close', async (event) => {
+    if (setting.closeToTray && !isQuitting) {
       event.preventDefault()
       createTray()
       win.hide()
       win.setSkipTaskbar(true)
+      return
     }
+
+    if (win.isDestroyed() || win.webContents.isDestroyed()) return
+    event.preventDefault()
+
+    const finish = () => {
+      if (!win.isDestroyed()) win.destroy()
+    }
+
+    const timer = setTimeout(finish, 1000)
+
+    ipcMain.once('app-cache:reply-snap', async (_evt, snap) => {
+      clearTimeout(timer)
+      if (snap) {
+        latestAppCache.data = latestAppCache.data || {}
+        latestAppCache.data.bookList = snap
+        console.log('snap close')
+        await saveAppCache(latestAppCache, APP_CACHE_PATH, Manga.sequelize, Metadata.sequelize)
+      }
+      finish()
+    })
+
+    win.webContents.send('app-cache:request-bookList-snap')
   })
   win.on('minimize', (event) => {
     if (setting.minimizeToTray) {
@@ -268,19 +315,97 @@ const loadBookListFromDatabase = async () => {
     bookList = await loadLegecyBookListFromFile()
     await saveBookListToDatabase(bookList)
   }
-  let metadataList = await Metadata.findAll()
-  metadataList = metadataList.map(m => m.toJSON())
-  const bookListLength = bookList.length
-  for (let i = 0; i < bookListLength; i++) {
-    const book = bookList[i]
-    const findMetadata = metadataList.find(m => m.hash === book.hash)
-    if (findMetadata) {
-      if (book.status === 'non-tag' && findMetadata.status !== 'non-tag') await Manga.update(findMetadata, { where: { id: book.id } })
-      Object.assign(book, findMetadata)
-    } else {
-      setProgressBar((i + 1) / bookListLength)
-      await Metadata.upsert(book)
+
+  // Fast path: use a single SQL JOIN with COALESCE instead of loading everything into JS
+  const mainStorage = Manga.sequelize.options.storage
+  if (mainStorage && metadataSqliteFile && path.resolve(mainStorage) !== path.resolve(metadataSqliteFile)) {
+    await Manga.sequelize.transaction(async (t) => {
+      // Ensure metadata DB is attached
+      const rows = await Manga.sequelize.query('PRAGMA database_list', { type: QueryTypes.SELECT, transaction: t })
+      const alias = 'meta'
+      const hit = rows.find(r => r.name === alias)
+      if (!hit) {
+        await Manga.sequelize.query(`ATTACH DATABASE $p AS ${alias}`, { bind: { p: metadataSqliteFile }, transaction: t })
+      } else if (path.resolve(hit.file || '') !== path.resolve(metadataSqliteFile)) {
+        await Manga.sequelize.query(`DETACH DATABASE ${alias}`, { transaction: t })
+        await Manga.sequelize.query(`ATTACH DATABASE $p AS ${alias}`, { bind: { p: metadataSqliteFile }, transaction: t })
+      }
+
+      // Seed metadata table from Mangas when metadata row is missing
+      await Manga.sequelize.query(`
+        INSERT INTO meta.Metadata (hash, title, status, rating, tags, title_jpn, filecount, posted, filesize, category, url, mark, createdAt, updatedAt)
+        SELECT m.hash, m.title, m.status, m.rating, m.tags, m.title_jpn, m.filecount, m.posted, m.filesize, m.category, m.url, m.mark, m.createdAt, m.updatedAt
+        FROM main.Mangas AS m
+        WHERE NOT EXISTS (SELECT 1 FROM meta.Metadata AS md WHERE md.hash = m.hash)
+          AND m.rowid = (SELECT MIN(m2.rowid) FROM main.Mangas m2 WHERE m2.hash = m.hash);
+      `, { transaction: t })
+
+      // Update Mangas from Metadata when metadata has better status
+      await Manga.sequelize.query(`
+        UPDATE main.Mangas AS m
+        SET
+          title = COALESCE(md.title, m.title),
+          rating = COALESCE(md.rating, m.rating),
+          tags = COALESCE(md.tags, m.tags),
+          title_jpn = COALESCE(md.title_jpn, m.title_jpn),
+          filecount = COALESCE(md.filecount, m.filecount),
+          posted = COALESCE(md.posted, m.posted),
+          filesize = COALESCE(md.filesize, m.filesize),
+          category = COALESCE(md.category, m.category),
+          url = COALESCE(md.url, m.url),
+          mark = COALESCE(md.mark, m.mark),
+          status = COALESCE(md.status, m.status),
+          createdAt = COALESCE(md.createdAt, m.createdAt),
+          updatedAt = COALESCE(md.updatedAt, m.updatedAt)
+        FROM meta.Metadata AS md
+        WHERE md.hash = m.hash
+          AND m.status = 'non-tag'
+          AND COALESCE(md.status, 'non-tag') <> 'non-tag';
+      `, { transaction: t })
+
+      // Load joined book list
+      bookList = await Manga.sequelize.query(`
+        SELECT
+          m.id, m.hash, m.coverPath, m.filepath, m.type, m.pageCount,
+          m.bundleSize, m.mtime, m.coverHash, m.hiddenBook, m.readCount, m.exist, m.date,
+          COALESCE(md.title, m.title) AS title,
+          COALESCE(md.status, m.status) AS status,
+          COALESCE(md.rating, m.rating) AS rating,
+          COALESCE(md.tags, m.tags, '{}') AS tags,
+          COALESCE(md.title_jpn, m.title_jpn) AS title_jpn,
+          COALESCE(md.filecount, m.filecount) AS filecount,
+          COALESCE(md.posted, m.posted) AS posted,
+          COALESCE(md.filesize, m.filesize) AS filesize,
+          COALESCE(md.category, m.category) AS category,
+          COALESCE(md.url, m.url) AS url,
+          COALESCE(md.mark, m.mark) AS mark,
+          COALESCE(md.createdAt, m.createdAt) AS createdAt,
+          COALESCE(md.updatedAt, m.updatedAt) AS updatedAt
+        FROM main.Mangas m
+        LEFT JOIN meta.Metadata md ON md.hash = m.hash;
+      `, { type: QueryTypes.SELECT, transaction: t })
+    })
+  } else {
+    // Fallback to original JS loop when DB paths are the same (should not happen normally)
+    let metadataList = await Metadata.findAll()
+    metadataList = metadataList.map(m => m.toJSON())
+    const bookListLength = bookList.length
+    for (let i = 0; i < bookListLength; i++) {
+      const book = bookList[i]
+      const findMetadata = metadataList.find(m => m.hash === book.hash)
+      if (findMetadata) {
+        if (book.status === 'non-tag' && findMetadata.status !== 'non-tag') await Manga.update(findMetadata, { where: { id: book.id } })
+        Object.assign(book, findMetadata)
+      } else {
+        setProgressBar((i + 1) / bookListLength)
+        await Metadata.upsert(book)
+      }
     }
+  }
+
+  // Parse JSON tags
+  for (const b of bookList) {
+    b.tags = JSON.parse(b.tags || '{}')
   }
   setProgressBar(-1)
   return bookList
@@ -315,57 +440,379 @@ const clearFolder = async (Folder) => {
   }
 }
 
+// ---- small concurrency limiter (p-limit style, zero deps) ----
+function createLimiter(concurrency) {
+  let active = 0
+  const queue = []
+  const next = () => {
+    active--
+    if (queue.length > 0) queue.shift()()
+  }
+  return fn =>
+    new Promise((resolve, reject) => {
+      const run = () => {
+        active++
+        Promise.resolve()
+          .then(fn)
+          .then((v) => { next(); resolve(v) }, (e) => { next(); reject(e) })
+      }
+      if (active < concurrency) run()
+      else queue.push(run)
+    })
+}
+
+// ---- abortable scan context (cancels prior scan, kills children) ----
+let scanContext = null
+function createAbortableContext(event) {
+  if (scanContext?.controller && !scanContext.controller.signal.aborted) {
+    scanContext.controller.abort()
+  }
+  const controller = new AbortController()
+  const children = new Set()
+  const onAbort = () => {
+    for (const cp of children) {
+      if (!cp.killed) cp.kill('SIGTERM')
+      setTimeout(() => { try { if (!cp.killed) cp.kill('SIGKILL') } catch {} }, 5000)
+    }
+  }
+  controller.signal.addEventListener('abort', onAbort, { once: true })
+
+  const sender = event?.sender
+  if (sender) {
+    const abortOnDestroyed = () => controller.abort()
+    sender.once('destroyed', abortOnDestroyed)
+    controller.signal.addEventListener('abort', () => {
+      try { sender.removeListener?.('destroyed', abortOnDestroyed) } catch {}
+    }, { once: true })
+  }
+
+  const abortOnQuit = () => controller.abort()
+  app.once('before-quit', abortOnQuit)
+  controller.signal.addEventListener('abort', () => {
+    try { app.removeListener('before-quit', abortOnQuit) } catch {}
+  }, { once: true })
+
+  scanContext = { controller, children }
+  return scanContext
+}
+
+async function coverAndHashInMem(filepath, type, opts = {}) {
+  const { hash, coverPath, pageCount, bundleSize, mtime, coverHash, coverSharp } =
+    await geneCoverFromBuffer(filepath, type, opts)
+  return { coverPath, pageCount, bundleSize, mtime, coverHash, hash, coverSharp }
+}
+
+async function scanLibraryFilesWithExclude() {
+  const toArray = (v) => (Array.isArray(v) ? v.filter(Boolean) : v ? [v] : [])
+  const uniqueBy = (arr, key) => Array.from(new Map(arr.map(x => [x[key], x])).values())
+
+  function isSubpath(parent, child, { includeSelf = false } = {}) {
+    const from = path.resolve(parent)
+    const to = path.resolve(child)
+    const rel = path.relative(from, to)
+    if (rel === '') return !!includeSelf
+    return !rel.startsWith('..') && !path.isAbsolute(rel)
+  }
+  function collapseRoots(paths) {
+    const abs = [...new Set(paths.map(p => path.resolve(p)))].sort()
+    const keep = []
+    outer: for (const p of abs) {
+      for (const k of keep) if (isSubpath(k, p, { includeSelf: false })) continue outer
+      keep.push(p)
+    }
+    return keep
+  }
+
+  let libraries = toArray(setting.libraries)
+  if (!libraries.length) return []
+  libraries = collapseRoots(libraries)
+  const lists = await Promise.all(libraries.map(lib => getBookFilelist(lib)))
+  let list = lists.flat()
+  list = uniqueBy(list, 'filepath')
+
+  const pattern = (setting.excludeFile || '').trim()
+  if (pattern) {
+    try {
+      const excludeRe = new RegExp(pattern)
+      list = list.filter(item => !excludeRe.test(item.filepath))
+    } catch (e) {
+      console.warn('Illegal regular expression in setting.excludeFile:', e?.message)
+    }
+  }
+  return list
+}
+
 
 // library and metadata
 ipcMain.handle('load-book-list', async (event, scan) => {
   if (scan) {
     sendMessageToWebContents('Start loading library')
 
-    const bookList = await Manga.findAll({ raw: true })
-    bookList.forEach(b => b.exist = false)
+    const context = createAbortableContext(event)
+    const { signal } = context.controller
+    try {
+      const dbBooks = await Manga.findAll({ raw: true })
+      const byFilepath = new Map(dbBooks.map(b => [b.filepath, b]))
+      const byId = new Map(dbBooks.map(b => [b.id, b]))
 
-    let list = await getBookFilelist(setting.library)
-    if (!_.isEmpty(setting.excludeFile)) {
-      let excludeRe
-      try {
-        excludeRe = new RegExp(setting.excludeFile)
-        list = _.filter(list, file => !excludeRe.test(file.filepath))
-      } catch {
-        console.log('Illegal regular expressions')
+      let list = await scanLibraryFilesWithExclude()
+      const listLength = list.length
+      sendMessageToWebContents(`Load ${listLength} book from library`)
+      if (listLength === 0) {
+        setProgressBar(-1)
+        return await loadBookListFromDatabase()
+      }
+
+      const tTotal0 = performance.now()
+      const workLimit = createLimiter(Math.max(1, Number(setting.concurrentScan) || 4))
+      const coverLimit = createLimiter(Math.max(1, Number(setting.concurrentWrite) || 2))
+      const dbLimit = createLimiter(1)
+      const BATCH_SIZE = 50
+      let processed = 0
+
+      const pathExists = async (p) => {
+        try {
+          await fs.promises.stat(p)
+          return true
+        } catch (e) { return !(e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) }
+      }
+
+      for (let offset = 0; offset < listLength; offset += BATCH_SIZE) {
+        signal?.throwIfAborted?.()
+        const chunk = list.slice(offset, Math.min(offset + BATCH_SIZE, listLength))
+        const chunkBooks = []
+
+        const chunkTasks = chunk.map(({ filepath, type }, j) =>
+          workLimit(async () => {
+            signal?.throwIfAborted?.()
+            const globalIdx = offset + j
+            try {
+              let found = byFilepath.get(filepath)
+              if (found) {
+                found.exist = true
+                if (found.status === 'missing') {
+                  const restoredStatus = (found.category || found.url) ? 'tagged' : 'non-tag'
+                  found.status = restoredStatus
+                  await dbLimit(() => Manga.update({ status: restoredStatus, exist: true }, { where: { id: found.id } }))
+                }
+                // migrate old flat cover path to sharded path
+                if (found.coverHash && found.coverPath) {
+                  const expectedSharded = makeShardedPath(COVER_PATH, found.coverHash + '.webp')
+                  if (found.coverPath !== expectedSharded) {
+                    try {
+                      await fs.promises.mkdir(path.dirname(expectedSharded), { recursive: true })
+                      await fs.promises.rename(found.coverPath, expectedSharded)
+                      found.coverPath = expectedSharded
+                      await dbLimit(() => Manga.update({ coverPath: expectedSharded }, { where: { id: found.id } }))
+                    } catch (e) {
+                      console.log(`Migrate cover failed for ${found.filepath}:`, e)
+                    }
+                  }
+                }
+                if (isPortable) {
+                  const newCoverPath = makeShardedPath(COVER_PATH, path.basename(found.coverPath))
+                  if (found.coverPath !== newCoverPath) {
+                    found.coverPath = newCoverPath
+                    await dbLimit(() => Manga.update({ coverPath: newCoverPath }, { where: { id: found.id } }))
+                  }
+                }
+                return
+              }
+
+              const existingManga = await findSameFile(filepath, type, Manga)
+              if (existingManga) {
+                const prev = byId.get(existingManga.id) || null
+                if (prev) {
+                  const exist = await pathExists(prev.filepath)
+                  if (!exist) {
+                    prev.exist = true
+                    const newCoverPath = makeShardedPath(COVER_PATH, path.basename(prev.coverPath))
+                    prev.coverPath = newCoverPath
+                    prev.filepath = filepath
+                    byFilepath.set(filepath, prev)
+                    await dbLimit(() => Manga.update({ filepath, coverPath: newCoverPath }, { where: { id: existingManga.id } }))
+                    return
+                  }
+                }
+              }
+
+              const { coverPath, pageCount, bundleSize, mtime, coverHash, hash, coverSharp } =
+                await coverAndHashInMem(filepath, type, { signal, onChild: cp => context.children.add(cp) })
+
+              if (coverPath && hash) {
+                const id = nanoid()
+                const newBook = {
+                  title: path.basename(filepath),
+                  coverPath,
+                  hash,
+                  filepath,
+                  type,
+                  id,
+                  pageCount,
+                  bundleSize,
+                  mtime: mtime.toJSON(),
+                  coverHash,
+                  status: 'non-tag',
+                  exist: true,
+                  date: Date.now()
+                }
+                await coverLimit(async () => {
+                  await fs.promises.mkdir(path.dirname(coverPath), { recursive: true })
+                  await coverSharp.toFile(coverPath)
+                })
+                signal?.throwIfAborted?.()
+                chunkBooks.push(newBook)
+                byFilepath.set(filepath, newBook)
+                byId.set(id, newBook)
+              } else {
+                sendMessageToWebContents(`Load ${filepath} failed because coverPath or hash is null, ${globalIdx + 1} of ${listLength}`)
+              }
+            } catch (e) {
+              if (e?.name === 'AbortError') throw e
+              sendMessageToWebContents(`Load ${filepath} failed because ${e?.message || e}, ${globalIdx + 1} of ${listLength}`)
+            }
+          })
+        )
+
+        const results = await Promise.allSettled(chunkTasks)
+        if (results.some(r => r.status === 'rejected' && r.reason?.name === 'AbortError')) {
+          throw Object.assign(new Error('Scan aborted'), { name: 'AbortError' })
+        }
+
+        if (chunkBooks.length > 0) {
+          await dbLimit(() =>
+            Manga.sequelize.transaction(async (t) => {
+              await Manga.bulkCreate(chunkBooks, {
+                transaction: t,
+                validate: false,
+                individualHooks: false,
+                returning: false
+              })
+            })
+          )
+        }
+
+        processed += chunk.length
+        setProgressBar(processed / listLength)
+        try { await clearFolder(TEMP_PATH) } catch {}
+      }
+
+      // mark books not seen in this scan as missing
+      const missingUpdates = []
+      for (const b of dbBooks) {
+        if (!b.exist && b.status !== 'missing') {
+          missingUpdates.push({ id: b.id, status: 'missing', exist: false })
+        }
+      }
+      if (missingUpdates.length) {
+        await Manga.sequelize.transaction(async (t) => {
+          for (const u of missingUpdates) {
+            await Manga.update({ status: u.status, exist: u.exist }, { where: { id: u.id }, transaction: t })
+          }
+        })
+      }
+
+      try { await clearFolder(TEMP_PATH) } catch {}
+      const totalS = (performance.now() - tTotal0) / 1000
+      sendMessageToWebContents(`Completed in : ${totalS.toFixed(2)} s`)
+    } finally {
+      setProgressBar(-1)
+    }
+  }
+  return await loadBookListFromDatabase({ checkExists: false })
+})
+
+ipcMain.handle('remove-missing-records', async (event, arg = {}) => {
+  const { confirm, vacuum } = arg
+  const missingBooks = await Manga.findAll({ where: { status: 'missing' }, raw: true })
+  const missingHashes = missingBooks.map(b => b.hash).filter(Boolean)
+  const missingIds = missingBooks.map(b => b.id)
+
+  let coverPaths = []
+  try {
+    const entries = await fs.promises.readdir(COVER_PATH, { withFileTypes: true })
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        const files = await fs.promises.readdir(path.join(COVER_PATH, entry.name))
+        coverPaths.push(...files.map(name => path.join(COVER_PATH, entry.name, name)))
+      } else if (entry.isFile()) {
+        coverPaths.push(path.join(COVER_PATH, entry.name))
       }
     }
+  } catch (err) {
+    console.log(err)
+  }
+  const dbCovers = await Manga.findAll({ attributes: ['coverPath'], raw: true })
+  const dbCoverSet = new Set(dbCovers.map(c => c.coverPath).filter(Boolean))
+  const unreferencedCovers = coverPaths.filter(fullPath => !dbCoverSet.has(fullPath))
+
+  if (!confirm) {
+    return {
+      totalRows: await Manga.count(),
+      missingFileCount: missingIds.length,
+      missingCoverCount: unreferencedCovers.length
+    }
+  }
+
+  for (const id of missingIds) {
+    await Manga.destroy({ where: { id } })
+  }
+  for (const hash of missingHashes) {
+    await Metadata.destroy({ where: { hash } })
+  }
+  for (const coverPath of unreferencedCovers) {
+    await fs.promises.rm(coverPath, { force: true, recursive: true })
+  }
+  if (vacuum) {
+    await Manga.sequelize.query('VACUUM')
+    await Metadata.sequelize.query('VACUUM')
+  }
+  return {
+    removedFiles: missingIds.length,
+    removedCovers: unreferencedCovers.length
+  }
+})
+
+ipcMain.handle('force-gene-book-list', async (event, arg) => {
+  const context = createAbortableContext(event)
+  const { signal } = context.controller
+  try {
+    sendMessageToWebContents('Start rebuilding library')
+    await Manga.destroy({ truncate: true })
+    await clearFolder(TEMP_PATH)
+    await clearFolder(COVER_PATH)
+
+    let list = await scanLibraryFilesWithExclude()
     const listLength = list.length
     sendMessageToWebContents(`Load ${listLength} book from library`)
+    if (listLength === 0) {
+      setProgressBar(-1)
+      return await loadBookListFromDatabase()
+    }
 
-    for (let i = 0; i < listLength; i++) {
-      try {
-        const { filepath, type } = list[i]
-        const foundData = bookList.find(b => b.filepath === filepath)
-        if (foundData === undefined) {
-          /*
-          * check whether the file is the relocated only
-          * return the existing data if and only if there is one match
-          * */
-          const existingManga = await findSameFile(filepath,type, Manga)
-          if (existingManga) {
-            // the file is relocated only, so no need to regenerate the cover
-            foundPrevBook = bookList.find(b => b.id === existingManga.id)
-            // this is necessary otherwise it will be deleted in the next step
-            foundPrevBook.exist = true
-            // update the Mangas table in database.sqlite
-            const newCoverPath = path.join(COVER_PATH, path.basename(foundPrevBook.coverPath))
-            foundPrevBook.coverPath = newCoverPath
-            await Manga.update(
-              { filepath: filepath, coverPath: newCoverPath },
-              { where: { id: existingManga.id } }
-            )
-          } else {
-            // this is the new file, so generate the cover
-            const id = nanoid()
-            const { targetFilePath, coverPath, pageCount, bundleSize, mtime, coverHash } = await geneCover(filepath, type)
-            if (targetFilePath && coverPath) {
-              const hash = createHash('sha1').update(fs.readFileSync(targetFilePath)).digest('hex')
-              const newBook = {
+    const tTotal0 = performance.now()
+    const workLimit = createLimiter(Math.max(1, Number(setting.concurrentScan) || 4))
+    const coverLimit = createLimiter(Math.max(1, Number(setting.concurrentWrite) || 2))
+    const dbLimit = createLimiter(1)
+    const BATCH_SIZE = 50
+    let processed = 0
+
+    for (let offset = 0; offset < listLength; offset += BATCH_SIZE) {
+      signal?.throwIfAborted?.()
+      const chunk = list.slice(offset, Math.min(offset + BATCH_SIZE, listLength))
+      const chunkBooks = []
+
+      const chunkTasks = chunk.map(({ filepath, type }, j) =>
+        workLimit(async () => {
+          signal?.throwIfAborted?.()
+          const globalIdx = offset + j
+          try {
+            const { coverPath, pageCount, bundleSize, mtime, coverHash, hash, coverSharp } =
+              await coverAndHashInMem(filepath, type, { signal, onChild: cp => context.children.add(cp) })
+
+            if (coverPath && hash) {
+              const id = nanoid()
+              chunkBooks.push({
                 title: path.basename(filepath),
                 coverPath,
                 hash,
@@ -379,144 +826,153 @@ ipcMain.handle('load-book-list', async (event, scan) => {
                 status: 'non-tag',
                 exist: true,
                 date: Date.now()
-              }
-              await Manga.create(newBook)
-              bookList.push(newBook)
+              })
+              await coverLimit(async () => {
+                await fs.promises.mkdir(path.dirname(coverPath), { recursive: true })
+                await coverSharp.toFile(coverPath)
+              })
+            } else {
+              sendMessageToWebContents(`Rebuild ${filepath} failed because coverPath or hash is null, ${globalIdx + 1} of ${listLength}`)
             }
+          } catch (e) {
+            if (e?.name === 'AbortError') throw e
+            sendMessageToWebContents(`Rebuild ${filepath} failed because ${e?.message || e}, ${globalIdx + 1} of ${listLength}`)
           }
-        } else {
-          foundData.exist = true
-          if (isPortable) {
-            const newCoverPath = path.join(COVER_PATH, path.basename(foundData.coverPath))
-            if (foundData.coverPath !== newCoverPath) {
-              foundData.coverPath = newCoverPath
-              await Manga.update({ coverPath: newCoverPath }, { where: { id: foundData.id } })
-            }
-          }
-        }
-        if (i === 0) setProgressBar(0.05)
-        if ((i + 1) % 50 === 0) {
-          setProgressBar(i / listLength)
-          await clearFolder(TEMP_PATH)
-        }
-      } catch (e) {
-        sendMessageToWebContents(`Load ${list[i].filepath} failed because ${e}, ${i + 1} of ${listLength}`)
-      }
-    }
-    await clearFolder(TEMP_PATH)
+        })
+      )
 
-    const existData = bookList.filter(b => b.exist === true)
-    try {
-      const coverList = await fs.promises.readdir(COVER_PATH)
-      const existCoverList = existData.map(b => b.coverPath)
-      const removeCoverList = _.difference(coverList.map(p => path.join(COVER_PATH, p)), existCoverList)
-      for (const coverPath of removeCoverList) {
-        await fs.promises.rm(coverPath)
+      const results = await Promise.allSettled(chunkTasks)
+      if (results.some(r => r.status === 'rejected' && r.reason?.name === 'AbortError')) {
+        throw Object.assign(new Error('Rebuild aborted'), { name: 'AbortError' })
       }
-    } catch (err) {
-      console.log(err)
+
+      if (chunkBooks.length > 0) {
+        await dbLimit(() =>
+          Manga.sequelize.transaction(async (t) => {
+            await Manga.bulkCreate(chunkBooks, {
+              transaction: t,
+              validate: false,
+              individualHooks: false,
+              returning: false
+            })
+          })
+        )
+      }
+
+      processed += chunk.length
+      setProgressBar(processed / listLength)
+      try { await clearFolder(TEMP_PATH) } catch {}
     }
-    const removeData = bookList.filter(b => b.exist === false)
-    for (const book of removeData) {
-      await Manga.destroy({ where: { id: book.id } })
-    }
+
+    try { await clearFolder(TEMP_PATH) } catch {}
+    const totalS = (performance.now() - tTotal0) / 1000
+    sendMessageToWebContents(`Rebuild completed in : ${totalS.toFixed(2)} s`)
+  } finally {
     setProgressBar(-1)
   }
   return await loadBookListFromDatabase()
 })
 
-ipcMain.handle('force-gene-book-list', async (event, arg) => {
-  await Manga.destroy({ truncate: true })
-  await clearFolder(TEMP_PATH)
-  await clearFolder(COVER_PATH)
-  sendMessageToWebContents('Start loading library')
-  let list = await getBookFilelist(setting.library)
-  if (!_.isEmpty(setting.excludeFile)) {
-    let excludeRe
-    try {
-      excludeRe = new RegExp(setting.excludeFile)
-      list = _.filter(list, file => !excludeRe.test(file.filepath))
-    } catch {
-      console.log('Illegal regular expressions')
-    }
-  }
-  const listLength = list.length
-  sendMessageToWebContents(`Load ${listLength} book from library`)
-  for (let i = 0; i < listLength; i++) {
-    try {
-      const { filepath, type } = list[i]
-      const id = nanoid()
-      const { targetFilePath, coverPath, pageCount, bundleSize, mtime, coverHash } = await geneCover(filepath, type)
-      if (targetFilePath && coverPath) {
-        const hash = createHash('sha1').update(fs.readFileSync(targetFilePath)).digest('hex')
-        await Manga.create({
-          title: path.basename(filepath),
-          coverPath,
-          hash,
-          filepath,
-          type,
-          id,
-          pageCount,
-          bundleSize,
-          mtime: mtime.toJSON(),
-          coverHash,
-          status: 'non-tag',
-          date: Date.now()
-        })
-      }
-      if ((i + 1) % 50 === 0) await clearFolder(TEMP_PATH)
-      setProgressBar(i / listLength)
-    } catch (e) {
-      sendMessageToWebContents(`Load ${list[i].filepath} failed because ${e}, ${i + 1} of ${listLength}`)
-    }
-  }
-  await clearFolder(TEMP_PATH)
-
-  setProgressBar(-1)
-  return await loadBookListFromDatabase()
-})
-
 ipcMain.handle('patch-local-metadata', async (event, arg) => {
-  const bookList = await loadBookListFromDatabase()
-  const bookListLength = bookList.length
-  await clearFolder(TEMP_PATH)
-  await clearFolder(COVER_PATH)
+  const context = createAbortableContext(event)
+  const { signal } = context.controller
+  try {
+    sendMessageToWebContents('Start patching local metadata')
+    let bookList = await loadBookListFromDatabase()
+    const bookListLength = bookList.length
+    await clearFolder(TEMP_PATH)
+    await clearFolder(COVER_PATH)
 
-  for (let i = 0; i < bookListLength; i++) {
-    try {
-      const book = bookList[i]
-      let { filepath, type } = book
-      if (!type) type = 'archive'
-      const { targetFilePath, coverPath, pageCount, bundleSize, mtime, coverHash } = await geneCover(filepath, type)
-      if (targetFilePath && coverPath) {
-        const hash = createHash('sha1').update(fs.readFileSync(targetFilePath)).digest('hex')
-        _.assign(book, { type, coverPath, hash, pageCount, bundleSize, mtime: mtime.toJSON(), coverHash })
-        await saveBookToDatabase(book)
-      }
-      if ((i + 1) % 50 === 0) await clearFolder(TEMP_PATH)
-      setProgressBar(i / bookListLength)
-    } catch (e) {
-      sendMessageToWebContents(`Patch ${bookList[i].filepath} failed because ${e}`)
+    if (bookListLength === 0) {
+      setProgressBar(-1)
+      return bookList
     }
-  }
 
-  await clearFolder(TEMP_PATH)
-  setProgressBar(-1)
-  return bookList
+    const tTotal0 = performance.now()
+    const workLimit = createLimiter(Math.max(1, Number(setting.concurrentScan) || 4))
+    const coverLimit = createLimiter(Math.max(1, Number(setting.concurrentWrite) || 2))
+    const dbLimit = createLimiter(1)
+    const BATCH_SIZE = 50
+    let processed = 0
+
+    for (let offset = 0; offset < bookListLength; offset += BATCH_SIZE) {
+      signal?.throwIfAborted?.()
+      const chunk = bookList.slice(offset, Math.min(offset + BATCH_SIZE, bookListLength))
+      const chunkUpdates = []
+
+      const chunkTasks = chunk.map((book, j) =>
+        workLimit(async () => {
+          signal?.throwIfAborted?.()
+          const globalIdx = offset + j
+          try {
+            let { filepath, type } = book
+            if (!type) type = 'archive'
+            const { coverPath, pageCount, bundleSize, mtime, coverHash, hash, coverSharp } =
+              await coverAndHashInMem(filepath, type, { signal, onChild: cp => context.children.add(cp) })
+
+            if (coverPath && hash) {
+              _.assign(book, { type, coverPath, hash, pageCount, bundleSize, mtime: mtime.toJSON(), coverHash, exist: true })
+              chunkUpdates.push(book)
+              await coverLimit(async () => {
+                await fs.promises.mkdir(path.dirname(coverPath), { recursive: true })
+                await coverSharp.toFile(coverPath)
+              })
+            } else {
+              sendMessageToWebContents(`Patch ${filepath} failed because coverPath or hash is null, ${globalIdx + 1} of ${bookListLength}`)
+            }
+          } catch (e) {
+            if (e?.name === 'AbortError') throw e
+            sendMessageToWebContents(`Patch ${book.filepath} failed because ${e?.message || e}, ${globalIdx + 1} of ${bookListLength}`)
+          }
+        })
+      )
+
+      const results = await Promise.allSettled(chunkTasks)
+      if (results.some(r => r.status === 'rejected' && r.reason?.name === 'AbortError')) {
+        throw Object.assign(new Error('Patch aborted'), { name: 'AbortError' })
+      }
+
+      if (chunkUpdates.length > 0) {
+        await dbLimit(() =>
+          Manga.sequelize.transaction(async (t) => {
+            for (const book of chunkUpdates) {
+              await Manga.update(
+                _.pick(book, ['type', 'coverPath', 'hash', 'pageCount', 'bundleSize', 'mtime', 'coverHash', 'exist']),
+                { where: { id: book.id }, transaction: t }
+              )
+            }
+          })
+        )
+      }
+
+      processed += chunk.length
+      setProgressBar(processed / bookListLength)
+      try { await clearFolder(TEMP_PATH) } catch {}
+    }
+
+    try { await clearFolder(TEMP_PATH) } catch {}
+    const totalS = (performance.now() - tTotal0) / 1000
+    sendMessageToWebContents(`Patch completed in : ${totalS.toFixed(2)} s`)
+    return await loadBookListFromDatabase()
+  } finally {
+    setProgressBar(-1)
+  }
 })
 
 ipcMain.handle('patch-local-metadata-by-book', async (event, book) => {
   let { filepath, type } = book
   if (!type) type = 'archive'
   try {
-    const { targetFilePath, coverPath, pageCount, bundleSize, mtime, coverHash } = await geneCover(filepath, type)
-    if (targetFilePath && coverPath) {
-      const hash = createHash('sha1').update(fs.readFileSync(targetFilePath)).digest('hex')
+    const { coverPath, pageCount, bundleSize, mtime, coverHash, hash, coverSharp } = await coverAndHashInMem(filepath, type)
+    if (coverPath && hash) {
+      await fs.promises.mkdir(path.dirname(coverPath), { recursive: true })
+      await coverSharp.toFile(coverPath)
       await clearFolder(TEMP_PATH)
       return Promise.resolve({ coverPath, hash, pageCount, bundleSize, mtime: mtime.toJSON(), coverHash })
     }
+    throw new Error('coverPath or hash is null')
   } catch (e) {
-    sendMessageToWebContents(`Patch ${book.filepath} failed because ${e}`)
+    sendMessageToWebContents(`Patch ${book.filepath} failed because ${e?.message || e}`)
     await clearFolder(TEMP_PATH)
     return Promise.reject()
   }
@@ -613,37 +1069,6 @@ ipcMain.handle('save-book', async (event, book) => {
 })
 
 // home
-ipcMain.handle('get-folder-tree', async (event, filePathList) => {
-  const librarySplitPathsLength = setting.library.split(path.sep).length - 1
-  const folderList = [...new Set(filePathList.map(filepath => path.dirname(filepath)))]
-  const bookPathSplitList = folderList.sort().map(fp => fp.split(path.sep).slice(librarySplitPathsLength))
-  const folderTreeObject = {}
-  for (const folders of bookPathSplitList) {
-    _.set(folderTreeObject, folders.map(f => '_' + f), {})
-  }
-  const resolveTree = (preRoot, tree, initFolder) => {
-    _.forIn(tree, (node, label) => {
-      const trueLabel = label.slice(1)
-      if (_.isEmpty(node)) {
-        preRoot.push({
-          label: trueLabel,
-          value: trueLabel,
-          folderPath: [...initFolder, trueLabel].slice(1).join(path.sep),
-        })
-      } else {
-        preRoot.push({
-          label: trueLabel,
-          value: trueLabel,
-          folderPath: [...initFolder, trueLabel].slice(1).join(path.sep),
-          children: resolveTree([], node, [...initFolder, trueLabel]),
-        })
-      }
-    })
-    return preRoot
-  }
-  return resolveTree([], folderTreeObject, [])
-})
-
 ipcMain.handle('load-collection-list', async (event, arg) => {
   return collectionList
 })
@@ -665,17 +1090,38 @@ ipcMain.handle('show-file', async (event, filepath) => {
   shell.showItemInFolder(filepath)
 })
 
-ipcMain.handle('use-new-cover', async (event, filepath) => {
+ipcMain.handle('capture-screenshot-cover', async (event, rect) => {
+  try {
+    const image = await mainWindow.webContents.capturePage(rect)
+    const screenshotPath = path.join(TEMP_PATH, `screenshot_${nanoid(8)}.png`)
+    await fs.promises.writeFile(screenshotPath, image.toPNG())
+    return screenshotPath
+  } catch (e) {
+    sendMessageToWebContents(`Capture screenshot cover failed because ${e}`)
+    return null
+  }
+})
+
+ipcMain.handle('use-new-cover', async (event, filepath, crop) => {
   const copyTempCoverPath = path.join(TEMP_PATH, nanoid(8) + path.extname(filepath))
   const coverPath = path.join(COVER_PATH, nanoid() + path.extname(filepath))
   try {
     await fs.promises.copyFile(filepath, copyTempCoverPath)
-    await sharp(copyTempCoverPath, { failOnError: false })
-    .resize(500, 707, {
-      fit: 'contain',
-      background: '#303133'
-    })
-    .toFile(coverPath)
+    let pipeline = sharp(copyTempCoverPath, { failOnError: false })
+    if (crop && typeof crop.left === 'number' && typeof crop.top === 'number' &&
+        typeof crop.width === 'number' && typeof crop.height === 'number') {
+      pipeline = pipeline.extract({
+        left: crop.left,
+        top: crop.top,
+        width: crop.width,
+        height: crop.height
+      })
+    }
+    await pipeline
+      .resize(500, 707, {
+        fit: 'cover'
+      })
+      .toFile(coverPath)
     return coverPath
   } catch (e) {
     sendMessageToWebContents(`Generate cover from ${filepath} failed because ${e}`)
@@ -694,44 +1140,60 @@ ipcMain.handle('get-default-manga-reader', async (event, arg) => {
   return _mange_reader
 })
 
+function findLibraryRoot(filepath) {
+  const libraries = Array.isArray(setting.libraries) ? setting.libraries.filter(Boolean) : []
+  for (const lib of libraries) {
+    const libPath = path.resolve(lib)
+    const targetPath = path.resolve(filepath)
+    const rel = path.relative(libPath, targetPath)
+    if (!rel.startsWith('..') && !path.isAbsolute(rel)) return libPath
+  }
+  return null
+}
+
 ipcMain.handle('delete-local-book', async (event, filepath) => {
-  if (filepath.startsWith(setting.library)) {
-    try {
-      const stats = await fs.promises.stat(filepath)
-      if (stats.isDirectory()) {
-        const imageFiles = globSync('*.@(jpg|jpeg|png|webp|avif|gif)', {
-          cwd: filepath,
-          nocase: true,
-          absolute: true
-        })
+  const libraryRoot = findLibraryRoot(filepath)
+  if (!libraryRoot) return
+  try {
+    const stats = await fs.promises.stat(filepath)
+    if (stats.isDirectory()) {
+      const imageFiles = globSync('*.@(jpg|jpeg|png|webp|avif|gif)', {
+        cwd: filepath,
+        nocase: true,
+        absolute: true
+      })
 
-        for (const imageFile of imageFiles) {
-          try {
-            await shell.trashItem(imageFile)
-          } catch {
-            await fs.promises.rm(imageFile, { force: true })
-          }
+      for (const imageFile of imageFiles) {
+        try {
+          await shell.trashItem(imageFile)
+        } catch {
+          await fs.promises.rm(imageFile, { force: true })
         }
+      }
 
-        const remainingFiles = await fs.promises.readdir(filepath)
-        if (remainingFiles.length === 0) {
-          await shell.trashItem(filepath)
-        }
-      } else {
+      const remainingFiles = await fs.promises.readdir(filepath)
+      if (remainingFiles.length === 0) {
         await shell.trashItem(filepath)
       }
-    } catch (e) {
-      sendMessageToWebContents(`Delete ${filepath} failed because ${e}`)
+    } else {
+      await shell.trashItem(filepath)
     }
-    await Manga.destroy({ where: { filepath: filepath } })
+  } catch (e) {
+    sendMessageToWebContents(`Delete ${filepath} failed because ${e}`)
   }
+  await Manga.destroy({ where: { filepath: filepath } })
 })
 
 ipcMain.handle('move-local-book', async (event, oldPath, folderArr) => {
   try {
     const pathSep = require('path').sep
     const folderPath = Array.isArray(folderArr) && folderArr.length > 0 ? folderArr.join(pathSep) : ''
-    const newFilePath = path.join(path.dirname(setting.library), folderPath, path.basename(oldPath))
+    const libraryRoot = findLibraryRoot(oldPath)
+    if (!libraryRoot) {
+      sendMessageToWebContents(`Move ${oldPath} failed because it is not inside any library`)
+      return false
+    }
+    const newFilePath = path.join(libraryRoot, folderPath, path.basename(oldPath))
     if (oldPath !== newFilePath) {
       await fs.promises.rename(oldPath, newFilePath)
       sendMessageToWebContents(`Move ${oldPath} to ${newFilePath} successfully`)
@@ -747,83 +1209,167 @@ ipcMain.handle('move-local-book', async (event, oldPath, folderArr) => {
 })
 
 // viewer
+let currentViewerSession = null
+
+const buildImageMetadata = async (list, bookId, type) => {
+  let defaultWidth = 1000
+  let defaultHeight = 1414
+  const firstItem = list[0]
+  // Only read first image metadata for folders (path already exists on disk).
+  // Archives use on-demand extraction; skip the extra extraction here to open faster.
+  if (firstItem && type === 'folder') {
+    try {
+      const meta = await sharp(firstItem.absolutePath, { failOnError: false }).metadata()
+      if (meta.width && meta.height) {
+        defaultWidth = meta.width
+        defaultHeight = meta.height
+      }
+    } catch (e) {
+      console.log('read first image metadata failed', e)
+    }
+  }
+
+  return list.map((item, i) => ({
+    id: `${bookId}_${i + 1}`,
+    index: i + 1,
+    relativePath: item.relativePath,
+    originalFilepath: item.absolutePath,
+    archivePath: item.archivePath || null,
+    innerPath: item.innerPath || null,
+    extname: path.extname(item.absolutePath || item.innerPath || ''),
+    width: defaultWidth,
+    height: defaultHeight,
+    total: list.length
+  }))
+}
+
 ipcMain.handle('load-manga-image-list', async (event, book) => {
   await clearFolder(VIEWER_PATH)
 
   const { filepath, type, id: bookId } = book
-  const list = await getImageListByBook(filepath, type)
+  const list = await getImageListByBookFast(filepath, type)
 
   sendImageLock = true
-  ;(async () => {
-    // 384 is the default 4K screen width divided by the default number of thumbnail columns
-    const thumbnailWidth = _.isFinite(screenWidth / setting.thumbnailColumn) ? Math.floor(screenWidth / setting.thumbnailColumn) : 384
-    const widthLimit = _.isNumber(setting.widthLimit) ? Math.ceil(setting.widthLimit) : screenWidth
-    for (let index = 1; index <= list.length; index++) {
-      if (sendImageLock) {
-        let imageFilepath = list[index - 1].absolutePath
-        const extname = path.extname(imageFilepath)
-        if (imageFilepath.search(/[%#]/) >= 0 || type === 'folder') {
-          const newFilepath = path.join(VIEWER_PATH, `rename_${nanoid(8)}${extname}`)
-          await fs.promises.copyFile(imageFilepath, newFilepath)
-          imageFilepath = newFilepath
+  const metadataList = await buildImageMetadata(list, bookId, type)
+  currentViewerSession = { book, list: metadataList }
+
+  return metadataList
+})
+
+// Process images concurrently; keep CPU/disk pressure reasonable.
+const imageProcessLimiter = createLimiter(4)
+const thumbnailProcessLimiter = createLimiter(2)
+
+ipcMain.handle('load-manga-image-range', async (event, start, end) => {
+  if (!currentViewerSession || !sendImageLock) return
+  const { book, list } = currentViewerSession
+  const { type, id: bookId } = book
+  const thumbnailWidth = _.isFinite(screenWidth / setting.thumbnailColumn) ? Math.floor(screenWidth / setting.thumbnailColumn) : 384
+  const widthLimit = _.isNumber(setting.widthLimit) ? Math.ceil(setting.widthLimit) : screenWidth
+
+  const startIndex = Math.max(0, start)
+  const endIndex = Math.min(list.length - 1, end)
+
+  const processItem = async (item) => {
+    if (!sendImageLock) return
+    try {
+      let imageFilepath = item.originalFilepath
+      const extname = item.extname
+
+      // On-demand extraction for archives / zip
+      if (item.archivePath && item.innerPath) {
+        imageFilepath = await extractImageByBook(item.archivePath, type, item.innerPath)
+      }
+
+      if (!imageFilepath) {
+        console.log('missing image filepath', item)
+        return
+      }
+
+      if (imageFilepath.search(/[%#]/) >= 0) {
+        const newFilepath = path.join(VIEWER_PATH, `rename_${nanoid(8)}${extname}`)
+        await fs.promises.copyFile(imageFilepath, newFilepath)
+        imageFilepath = newFilepath
+      }
+
+      let { width, height } = item
+      try {
+        const meta = await sharp(imageFilepath, { failOnError: false }).metadata()
+        if (meta.width && meta.height) {
+          width = meta.width
+          height = meta.height
         }
-        let { width, height } = await sharp(imageFilepath, { failOnError: false }).metadata()
-        if (widthLimit !== 0 && width > widthLimit) {
-          height = Math.floor(height * (widthLimit / width))
-          width = widthLimit
-          const resizedFilepath = path.join(VIEWER_PATH, `resized_${nanoid(8)}.jpg`)
+      } catch (e) {
+        console.log('read image metadata failed', imageFilepath, e)
+      }
+
+      if (widthLimit !== 0 && width > widthLimit) {
+        height = Math.floor(height * (widthLimit / width))
+        width = widthLimit
+        const resizedFilepath = path.join(VIEWER_PATH, `resized_${nanoid(8)}.jpg`)
+        switch (extname) {
+          case '.gif':
+            break
+          default:
+            await sharp(imageFilepath, { failOnError: false })
+              .resize({ width })
+              .toFile(resizedFilepath)
+            imageFilepath = resizedFilepath
+            break
+        }
+      }
+
+      mainWindow.webContents.send('manga-image', {
+        id: item.id,
+        index: item.index,
+        relativePath: item.relativePath,
+        filepath: imageFilepath,
+        width,
+        height,
+        total: list.length
+      })
+
+      if (setting.viewerType !== 'comicread') {
+        await thumbnailProcessLimiter(async () => {
+          if (!sendImageLock) return
+          let thumbnailPath = path.join(VIEWER_PATH, `thumb_${nanoid(8)}.jpg`)
           switch (extname) {
             case '.gif':
+              thumbnailPath = imageFilepath
               break
             default:
               await sharp(imageFilepath, { failOnError: false })
-                .resize({ width })
-                .toFile(resizedFilepath)
-              imageFilepath = resizedFilepath
+                .resize({ width: thumbnailWidth })
+                .toFile(thumbnailPath)
               break
           }
-        }
-        mainWindow.webContents.send('manga-image', {
-          id: `${bookId}_${index}`,
-          index,
-          relativePath: list[index - 1].relativePath,
-          filepath: imageFilepath,
-          width, height,
-          total: list.length
+          mainWindow.webContents.send('manga-thumbnail-image', {
+            id: item.id,
+            thumbId: `thumb_${bookId}_${item.index}`,
+            index: item.index,
+            relativePath: item.relativePath,
+            filepath: imageFilepath,
+            thumbnailPath,
+            total: list.length
+          })
         })
-        if (setting.viewerType !== 'comicread') {
-          ;(async () => {
-            let thumbnailPath = path.join(VIEWER_PATH, `thumb_${nanoid(8)}.jpg`)
-            switch (extname) {
-              case '.gif':
-                thumbnailPath = imageFilepath
-                break
-              default:
-                await sharp(imageFilepath, { failOnError: false })
-                  .resize({ width: thumbnailWidth })
-                  .toFile(thumbnailPath)
-                break
-            }
-            mainWindow.webContents.send('manga-thumbnail-image', {
-              id: `${bookId}_${index}`,
-              thumbId: `thumb_${bookId}_${index}`,
-              index,
-              relativePath: list[index - 1].relativePath,
-              filepath: imageFilepath,
-              thumbnailPath,
-              total: list.length
-            })
-          })()
-        }
       }
+    } catch (err) {
+      console.log('process image item failed', item, err)
     }
-  })()
+  }
 
-  return list
+  const tasks = []
+  for (let i = startIndex; i <= endIndex; i++) {
+    const item = list[i]
+    tasks.push(imageProcessLimiter(() => processItem(item)))
+  }
+  await Promise.all(tasks)
 })
 
 ipcMain.handle('release-sendimagelock', () => {
   sendImageLock = false
+  currentViewerSession = null
 })
 
 ipcMain.handle('delete-image', async (event, filename, filepath, type) => {
@@ -860,7 +1406,24 @@ ipcMain.handle('load-setting', async (event, arg) => {
   return setting
 })
 
-ipcMain.handle('save-setting', async (event, receiveSetting) => {
+/** Exclusive save setting with coalescing (last write wins)
+ * If multiple save-settings calls happen in a short time, only the last one is applied and written to setting.json
+ * This avoids the race condition where one overlaps the other, resulting in a wrong setting.json
+ * */
+
+let writing = false
+let pending = null
+let drainPromise = null
+const SETTINGS_FILE = path.join(STORE_PATH, 'setting.json')
+
+async function atomicWriteSettings(obj) {
+  const json = JSON.stringify(obj, null, 2) + '\n'
+  const tmp = SETTINGS_FILE + '.tmp'
+  await fs.promises.writeFile(tmp, json, 'utf-8')
+  await fs.promises.rename(tmp, SETTINGS_FILE)
+}
+
+async function applySideEffects(setting, receiveSetting) {
   if (receiveSetting.proxy) {
     await session.defaultSession.setProxy({
       mode: 'fixed_servers',
@@ -887,15 +1450,50 @@ ipcMain.handle('save-setting', async (event, receiveSetting) => {
       openAtLogin: receiveSetting.startOnLogin
     })
   }
-  setting = receiveSetting
-  if (tray && !setting.minimizeToTray && !setting.closeToTray) {
+  if (tray && !receiveSetting.minimizeToTray && !receiveSetting.closeToTray) {
     tray.destroy()
     tray = null
   }
-  const targetPath = path.join(STORE_PATH, 'setting.json')
-  const tempPath = path.join(STORE_PATH, 'setting.json.tmp')
-  await fs.promises.writeFile(tempPath, JSON.stringify(setting, null, '  '), { encoding: 'utf-8' })
-  return await fs.promises.rename(tempPath, targetPath)
+}
+
+async function saveSettingExclusive(next) {
+  pending = next            // keep only the latest payload
+  if (writing) return drainPromise
+
+  writing = true
+  drainPromise = (async () => {
+    try {
+      while (pending) {
+        const patch = pending  // snapshot latest
+        pending = null
+        const prev = setting
+        const merged = { ...prev, ...patch }
+        await applySideEffects(prev, merged) // missing settings in the later will not override the previous ones
+        await atomicWriteSettings(merged)
+        setting = merged
+      }
+    } finally {
+      writing = false
+      drainPromise = null
+    }
+  })()
+  return drainPromise
+}
+
+ipcMain.handle('save-setting', (_e, receiveSetting) => saveSettingExclusive(receiveSetting))
+
+// ====================   app cache    ====================
+ipcMain.handle('app-cache:load-verify-cache', async (_e, opts = {}) => {
+  try {
+    return await LoadVerifyCache(APP_CACHE_PATH, Manga.sequelize, Metadata.sequelize)
+  } catch (e) {
+    console.log('LoadVerifyCache failed:', e)
+    return { ok: false, appCache: null }
+  }
+})
+
+ipcMain.on('app-cache::update-cache', (_e, appCache) => {
+  latestAppCache = appCache
 })
 
 ipcMain.handle('export-database', async (event, folder) => {

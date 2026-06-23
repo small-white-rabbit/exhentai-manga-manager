@@ -40,9 +40,14 @@
       <el-tag
         class="book-status-tag"
         effect="plain"
-        :type="book.status === 'non-tag' ? 'info' : book.status === 'tagged' ? 'success' : 'warning'"
-        @click="$emit('searchFromTag', book.status)"
-      >{{book.status}}</el-tag>
+        :type="book.status === 'non-tag' ? 'info' : book.status === 'tagged' ? 'success' : book.status === 'missing' ? 'danger' : 'warning'"
+        :style="book.status === 'missing'
+          ? { backgroundColor: categoryColors['Missing'], color: '#fff', border: '1px solid ' + categoryColors['Missing'] }
+          : book.category
+            ? { backgroundColor: categoryColors[book.category] || '#272727', color: '#fff', border: '1px solid ' + (categoryColors[book.category] || '#272727') }
+            : {}"
+        @click="$emit('searchFromTag', book.status === 'missing' ? 'missing' : (book.category || book.status), book.status === 'missing' ? 'status' : (book.category ? 'cat' : undefined))"
+      >{{book.status === 'missing' ? 'Missing' : (book.category || book.status)}}</el-tag>
       <el-rate v-model="bookRating" size="small" allow-half @change="saveBook(Object.assign({}, book, {rating: bookRating}))"/>
     </div>
   </div>
@@ -89,6 +94,21 @@ const filterCollectTag = (tagObject) => {
   } else {
     return []
   }
+}
+
+// background color of the tag based on category, same color scheme as exhentai
+const categoryColors = {
+  'Doujinshi': '#9E2720',
+  'Manga': '#DB6C24',
+  'Artist CG': '#D38F1D',
+  'Game CG': '#6A936D',
+  'Western': '#AB9F60',
+  'Non-H': '#5FA9CF',
+  'Image Set': '#325CA2',
+  'Cosplay': '#6A32A2',
+  'Asian Porn': '#A23282',
+  'Misc': '#777777',
+  'Missing': '#20c5de'
 }
 
 const onMangaTitleContextMenu = (e, book) => {

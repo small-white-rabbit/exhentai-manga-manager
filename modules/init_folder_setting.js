@@ -48,7 +48,7 @@ const prepareSetting = () => {
   } catch {
     setting = {
       proxy: undefined,
-      library: app.getPath('downloads'),
+      libraries: [],
       metadataPath: undefined,
       imageExplorer: _mange_reader,
       pageSize: 42,
@@ -74,8 +74,17 @@ const prepareSetting = () => {
       skipDeleteConfirm: false,
       displayTitle: 'japaneseTitle',
       keepReadingProgress: true,
+      concurrentScan: 4,
+      concurrentWrite: 2,
+      excludeFile: '',
     }
     fs.writeFileSync(path.join(STORE_PATH, 'setting.json'), JSON.stringify(setting, null, '  '), { encoding: 'utf-8' })
+  }
+  // migrate single library to libraries array
+  if (!Array.isArray(setting.libraries)) {
+    const legacy = setting.library || setting.libraries
+    setting.libraries = legacy ? [legacy] : []
+    delete setting.library
   }
   return setting
 }
