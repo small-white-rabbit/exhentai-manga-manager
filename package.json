@@ -21,6 +21,8 @@
     "directories": {
       "output": "out"
     },
+    "npmRebuild": false,
+    "publish": null,
     "files": [
       "dist/index.html",
       "dist/assets/*",
