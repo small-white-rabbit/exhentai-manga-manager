@@ -17,6 +17,7 @@ const windowStateKeeper = require('electron-window-state')
 const express = require('express')
 const { globSync } = require('glob')
 const { performance } = require('node:perf_hooks')
+const os = require('os')
 
 const { prepareMangaModel, prepareMetadataModel, ensureMetaTable, installRevTriggers } = require('./modules/database')
 const { prepareTemplate } = require('./modules/prepare_menu.js')
@@ -100,6 +101,18 @@ const sendMessageToWebContents = (message) => {
   mainWindow.webContents.send('send-message', message)
 }
 
+const getLanIP = () => {
+  const interfaces = os.networkInterfaces()
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === 'IPv4' && !iface.internal && !iface.address.startsWith('127.')) {
+        return iface.address
+      }
+    }
+  }
+  return 'localhost'
+}
+
 let mainWindow
 let tray
 let screenWidth
@@ -172,11 +185,7 @@ const createWindow = () => {
     },
     show: false
   })
-  if (app.isPackaged) {
-    win.loadFile('dist/index.html')
-  } else {
-    win.loadURL('http://localhost:5374')
-  }
+  win.loadFile('dist/index.html')
   win.setMenuBarVisibility(false)
   win.setAutoHideMenuBar(true)
   const menu = Menu.buildFromTemplate(prepareTemplate(win))
@@ -554,6 +563,10 @@ ipcMain.handle('load-book-list', async (event, scan) => {
       const dbBooks = await Manga.findAll({ raw: true })
       const byFilepath = new Map(dbBooks.map(b => [b.filepath, b]))
       const byId = new Map(dbBooks.map(b => [b.id, b]))
+      // 重置 exist 标记，本次扫描未再次确认的文件会被标记为 missing
+      for (const b of dbBooks) {
+        b.exist = false
+      }
 
       let list = await scanLibraryFilesWithExclude()
       const listLength = list.length
@@ -1644,6 +1657,570 @@ ipcMain.on('get-path-sep', async (event, arg) => {
 })
 
 
+const WEB_READER_HTML = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>exhentai-manga-manager Web Reader</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: #1a1a1a;
+      color: #eee;
+      overflow: hidden;
+    }
+
+    #app { width: 100%; height: 100%; }
+
+    .view {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .hidden { display: none !important; }
+
+    /* Library */
+    #library-view { padding: 16px; overflow-y: auto; }
+
+    .toolbar {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .toolbar input[type="text"], .toolbar select {
+      padding: 8px 12px;
+      border-radius: 6px;
+      border: 1px solid #444;
+      background: #2a2a2a;
+      color: #eee;
+      font-size: 14px;
+      outline: none;
+    }
+
+    .toolbar input[type="text"] { flex: 1; min-width: 200px; }
+
+    .toolbar button {
+      padding: 8px 16px;
+      border-radius: 6px;
+      border: none;
+      background: #3b82f6;
+      color: white;
+      font-size: 14px;
+      cursor: pointer;
+    }
+
+    .toolbar button:hover { background: #2563eb; }
+
+    .book-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 16px;
+    }
+
+    .book-card {
+      background: #252525;
+      border-radius: 8px;
+      overflow: hidden;
+      cursor: pointer;
+      transition: transform 0.15s, box-shadow 0.15s;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .book-card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 6px 16px rgba(0,0,0,0.4);
+    }
+
+    .book-cover {
+      width: 100%;
+      aspect-ratio: 500 / 707;
+      object-fit: cover;
+      background: #111;
+      display: block;
+    }
+
+    .book-info {
+      padding: 10px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .book-title {
+      font-size: 13px;
+      line-height: 1.4;
+      max-height: 2.8em;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      color: #fff;
+    }
+
+    .book-meta {
+      font-size: 11px;
+      color: #999;
+    }
+
+    .loading, .empty {
+      text-align: center;
+      padding: 40px;
+      color: #888;
+    }
+
+    /* Reader */
+    #reader-view { background: #000; position: relative; }
+
+    #reader-image {
+      flex: 1;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      position: relative;
+    }
+
+    #reader-image img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      user-select: none;
+      -webkit-user-drag: none;
+    }
+
+    #waterfall-view {
+      flex: 1;
+      width: 100%;
+      overflow-y: auto;
+      overflow-x: hidden;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 52px 0 60px 0;
+      background: #111;
+    }
+
+    #waterfall-view img {
+      max-width: 100%;
+      width: auto;
+      height: auto;
+      display: block;
+      background: #000;
+      cursor: pointer;
+    }
+
+    .reader-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      z-index: 5;
+    }
+
+    .reader-overlay .tap-zone {
+      flex: 1;
+      height: 100%;
+    }
+
+    .reader-bar {
+      position: absolute;
+      left: 0;
+      right: 0;
+      padding: 10px 16px;
+      background: rgba(0,0,0,0.7);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      z-index: 10;
+      backdrop-filter: blur(4px);
+    }
+
+    #reader-top-bar {
+      top: 0;
+      transition: transform 0.25s ease;
+    }
+    #reader-top-bar.scrolled-down { transform: translateY(-100%); }
+    #reader-bottom-bar { bottom: 0; }
+
+    .reader-bar button, .reader-bar select {
+      padding: 6px 12px;
+      border-radius: 4px;
+      border: none;
+      background: #444;
+      color: #fff;
+      cursor: pointer;
+      font-size: 13px;
+    }
+
+    .reader-bar select {
+      appearance: auto;
+      padding-right: 8px;
+    }
+
+    .reader-bar button:hover, .reader-bar select:hover { background: #555; }
+
+    .reader-title {
+      flex: 1;
+      font-size: 14px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin: 0;
+    }
+
+    .reader-bar input[type="range"] {
+      flex: 1;
+      min-width: 100px;
+    }
+
+    .page-input {
+      width: 60px;
+      text-align: center;
+      padding: 4px;
+      border-radius: 4px;
+      border: 1px solid #555;
+      background: #222;
+      color: #fff;
+    }
+
+    .error-toast {
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #ef4444;
+      color: white;
+      padding: 10px 20px;
+      border-radius: 6px;
+      z-index: 100;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="library-view" class="view">
+      <div class="toolbar">
+        <input type="text" id="search-input" placeholder="搜索标题、标签、文件名..." />
+        <select id="sort-select">
+          <option value="date_added">添加时间</option>
+          <option value="date_modified">修改时间</option>
+          <option value="date_posted">发布时间</option>
+          <option value="size">大小</option>
+          <option value="rating">评分</option>
+          <option value="read_count">阅读次数</option>
+          <option value="random">随机</option>
+        </select>
+        <button id="search-btn">搜索</button>
+        <button id="refresh-btn">刷新</button>
+      </div>
+      <div id="book-list" class="book-grid"></div>
+      <div id="library-status" class="loading">正在加载书库...</div>
+    </div>
+
+    <div id="reader-view" class="view hidden">
+      <div id="reader-top-bar" class="reader-bar">
+        <button id="back-btn">返回</button>
+        <h2 id="reader-title" class="reader-title"></h2>
+        <select id="reader-mode" title="阅读模式">
+          <option value="waterfall">瀑布流</option>
+          <option value="page">翻页</option>
+        </select>
+      </div>
+      <div id="reader-image">
+        <img id="page-img" src="" alt="page" />
+        <div class="reader-overlay">
+          <div class="tap-zone" id="tap-prev"></div>
+          <div class="tap-zone" id="tap-next"></div>
+        </div>
+      </div>
+      <div id="waterfall-view" class="hidden"></div>
+      <div id="reader-bottom-bar" class="reader-bar">
+        <button id="prev-btn">上一页</button>
+        <input type="range" id="page-slider" min="1" max="1" value="1" />
+        <input type="number" id="page-input" class="page-input" min="1" value="1" />
+        <span id="page-count">/ 1</span>
+        <button id="next-btn">下一页</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="error-toast" class="error-toast"></div>
+
+  <script>
+    const $ = id => document.getElementById(id)
+
+    let currentBook = null
+    let currentPages = []
+    let currentPage = 1
+    let readerMode = 'waterfall'
+    let preloadedImages = new Map()
+    let waterfallObserver = null
+
+    function showError(msg) {
+      const toast = $('error-toast')
+      toast.textContent = msg
+      toast.style.display = 'block'
+      setTimeout(() => { toast.style.display = 'none' }, 3000)
+    }
+
+    async function fetchJSON(url) {
+      const res = await fetch(url)
+      if (!res.ok) throw new Error(\`\${res.status} \${res.statusText}\`)
+      return res.json()
+    }
+
+    async function loadLibrary() {
+      const listEl = $('book-list')
+      const statusEl = $('library-status')
+      const filter = $('search-input').value.trim()
+      const sortby = $('sort-select').value
+
+      listEl.innerHTML = ''
+      statusEl.textContent = '正在加载...'
+      statusEl.style.display = 'block'
+
+      try {
+        const query = new URLSearchParams({ start: '0', length: '200', sortby })
+        if (filter) query.set('filter', filter)
+        query.set('_t', Date.now().toString())
+        const data = await fetchJSON(\`/api/search?\${query.toString()}\`)
+        const books = data.data || []
+
+        if (books.length === 0) {
+          statusEl.textContent = filter ? '没有搜索到结果' : '书库为空'
+          return
+        }
+
+        statusEl.style.display = 'none'
+        for (const book of books) {
+          const card = document.createElement('div')
+          card.className = 'book-card'
+          card.innerHTML = \`
+            <img class="book-cover" src="/api/archives/\${encodeURIComponent(book.arcid)}/thumbnail" loading="lazy" alt="cover" />
+            <div class="book-info">
+              <div class="book-title">\${escapeHtml(book.title)}</div>
+              <div class="book-meta">\${book.pagecount || '?'} 页 · \${formatSize(book.size)}</div>
+            </div>
+          \`
+          card.addEventListener('click', () => openBook(book))
+          listEl.appendChild(card)
+        }
+      } catch (err) {
+        statusEl.textContent = '加载失败: ' + err.message
+        showError('加载书库失败: ' + err.message)
+      }
+    }
+
+    async function openBook(book) {
+      try {
+        const data = await fetchJSON(\`/api/archives/\${encodeURIComponent(book.arcid)}/files\`)
+        currentBook = book
+        currentPages = data.pages || []
+        currentPage = 1
+
+        $('reader-title').textContent = book.title
+        $('page-count').textContent = \`/ \${currentPages.length}\`
+        $('page-slider').max = currentPages.length
+        $('page-slider').value = 1
+        $('page-input').max = currentPages.length
+        $('page-input').value = 1
+        $('reader-mode').value = readerMode
+
+        $('library-view').classList.add('hidden')
+        $('reader-view').classList.remove('hidden')
+
+        renderReader()
+      } catch (err) {
+        showError('打开漫画失败: ' + err.message)
+      }
+    }
+
+    function closeReader() {
+      $('reader-view').classList.add('hidden')
+      $('library-view').classList.remove('hidden')
+      currentBook = null
+      currentPages = []
+      currentPage = 1
+      preloadedImages.clear()
+      if (waterfallObserver) {
+        waterfallObserver.disconnect()
+        waterfallObserver = null
+      }
+    }
+
+    function renderReader() {
+      if (readerMode === 'waterfall') {
+        $('reader-image').classList.add('hidden')
+        $('reader-bottom-bar').classList.add('hidden')
+        $('waterfall-view').classList.remove('hidden')
+        renderWaterfall()
+      } else {
+        $('waterfall-view').classList.add('hidden')
+        $('reader-image').classList.remove('hidden')
+        $('reader-bottom-bar').classList.remove('hidden')
+        updatePage()
+      }
+    }
+
+    function renderWaterfall() {
+      const container = $('waterfall-view')
+      container.innerHTML = ''
+      $('reader-top-bar').classList.remove('scrolled-down')
+
+      let lastScrollTop = 0
+      container.onscroll = () => {
+        const st = container.scrollTop
+        if (st > lastScrollTop && st > 60) {
+          $('reader-top-bar').classList.add('scrolled-down')
+        } else {
+          $('reader-top-bar').classList.remove('scrolled-down')
+        }
+        lastScrollTop = st <= 0 ? 0 : st
+      }
+
+      waterfallObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+          const img = entry.target
+          if (entry.isIntersecting) {
+            const src = img.dataset.src
+            if (src && img.src !== src) img.src = src
+          }
+        })
+      }, { root: container, rootMargin: '1000px' })
+
+      currentPages.forEach((url, index) => {
+        const img = document.createElement('img')
+        img.dataset.src = url
+        img.alt = \`page \${index + 1}\`
+        img.loading = 'lazy'
+        waterfallObserver.observe(img)
+        container.appendChild(img)
+      })
+
+      container.scrollTop = 0
+    }
+
+    function updatePage() {
+      if (!currentBook || currentPages.length === 0) return
+      const pageUrl = currentPages[currentPage - 1]
+      $('page-img').src = pageUrl
+      $('page-slider').value = currentPage
+      $('page-input').value = currentPage
+      preloadNeighbors()
+    }
+
+    function preloadNeighbors() {
+      const urls = []
+      if (currentPage > 1) urls.push(currentPages[currentPage - 2])
+      if (currentPage < currentPages.length) urls.push(currentPages[currentPage])
+
+      for (const url of urls) {
+        if (!preloadedImages.has(url)) {
+          const img = new Image()
+          img.src = url
+          preloadedImages.set(url, img)
+        }
+      }
+    }
+
+    function prevPage() {
+      if (currentPage > 1) {
+        currentPage--
+        updatePage()
+      }
+    }
+
+    function nextPage() {
+      if (currentPage < currentPages.length) {
+        currentPage++
+        updatePage()
+      }
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div')
+      div.textContent = text
+      return div.innerHTML
+    }
+
+    function formatSize(bytes) {
+      if (!bytes || isNaN(bytes)) return '?'
+      const units = ['B', 'KB', 'MB', 'GB']
+      let i = 0
+      let size = Number(bytes)
+      while (size >= 1024 && i < units.length - 1) {
+        size /= 1024
+        i++
+      }
+      return size.toFixed(1) + ' ' + units[i]
+    }
+
+    // Events
+    $('search-btn').addEventListener('click', loadLibrary)
+    $('refresh-btn').addEventListener('click', loadLibrary)
+    $('search-input').addEventListener('keydown', e => { if (e.key === 'Enter') loadLibrary() })
+
+    $('back-btn').addEventListener('click', closeReader)
+    $('prev-btn').addEventListener('click', prevPage)
+    $('next-btn').addEventListener('click', nextPage)
+    $('tap-prev').addEventListener('click', prevPage)
+    $('tap-next').addEventListener('click', nextPage)
+
+    $('reader-mode').addEventListener('change', e => {
+      readerMode = e.target.value
+      renderReader()
+    })
+
+    $('page-slider').addEventListener('input', e => {
+      currentPage = parseInt(e.target.value, 10)
+      updatePage()
+    })
+
+    $('page-input').addEventListener('change', e => {
+      let p = parseInt(e.target.value, 10)
+      if (isNaN(p)) p = 1
+      p = Math.max(1, Math.min(currentPages.length, p))
+      currentPage = p
+      updatePage()
+    })
+
+    document.addEventListener('keydown', e => {
+      if ($('reader-view').classList.contains('hidden')) return
+      if (readerMode !== 'page') return
+      switch (e.key) {
+        case 'ArrowLeft': case 'PageUp': prevPage(); break
+        case 'ArrowRight': case 'PageDown': case ' ': nextPage(); break
+        case 'Escape': closeReader(); break
+        case 'Home': currentPage = 1; updatePage(); break
+        case 'End': currentPage = currentPages.length; updatePage(); break
+      }
+    })
+
+    // Init
+    loadLibrary()
+  </script>
+</body>
+</html>
+`
+
 // 初始化Express
 const LANBrowsing = express()
 const port = 23786
@@ -1680,7 +2257,24 @@ const staticFilePath = path.resolve(STORE_PATH, 'public')
 fs.mkdirSync(staticFilePath, { recursive: true })
 LANBrowsing.use('/static', express.static(staticFilePath))
 
-let mangas = []
+// 禁止浏览器缓存 API 响应，确保网页数据实时
+LANBrowsing.use('/api', (req, res, next) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+  res.set('Pragma', 'no-cache')
+  res.set('Expires', '0')
+  next()
+})
+
+// Web 浏览器阅读器
+LANBrowsing.get('/web', (req, res) => {
+  res.set('Content-Type', 'text/html; charset=utf-8')
+  res.send(WEB_READER_HTML)
+})
+LANBrowsing.get('/web/', (req, res) => {
+  res.set('Content-Type', 'text/html; charset=utf-8')
+  res.send(WEB_READER_HTML)
+})
+
 let tagTranslation = undefined
 
 // sort
@@ -1736,7 +2330,7 @@ LANBrowsing.get('/api/search', async (req, res) => {
     }
 
     // 读取并搜索数据库
-    mangas = await loadBookListFromDatabase()
+    const mangas = (await loadBookListFromDatabase()).filter(manga => manga.status !== 'missing')
     let filterMangas
     if (filter) {
       filterMangas = mangas.filter(manga => {
@@ -1818,8 +2412,8 @@ LANBrowsing.get('/api/archives/:hash/metadata', async (req, res) => {
     const mangaHash = req.params.hash
 
     // 从数据库找到对应的漫画
-    if (_.isEmpty(mangas)) mangas = await loadBookListFromDatabase()
-    const manga = await mangas.find(manga => manga.hash === mangaHash)
+    const mangas = await loadBookListFromDatabase()
+    const manga = mangas.find(manga => manga.hash === mangaHash)
 
     if (!manga) {
       return res.status(404).send('Manga not found')
@@ -1977,15 +2571,19 @@ LANBrowsing.get('/', (req, res) => {
 let LANBrowsingInstance
 // 启动Express服务器
 const enableLANBrowsing = () => {
+  const lanIP = getLanIP()
+  const sendLANMessage = (prefix) => {
+    sendMessageToWebContents(`${prefix} http://${lanIP}:${port}\nWeb reader: http://${lanIP}:${port}/web`)
+  }
   if (LANBrowsingInstance?.listening) {
     LANBrowsingInstance.close(() => {
       LANBrowsingInstance = LANBrowsing.listen(port, '0.0.0.0', () => {
-        sendMessageToWebContents(`LAN browsing restart and listening at http://0.0.0.0:${port}`)
+        sendLANMessage('LAN browsing restart and listening at')
       })
     })
   } else {
     LANBrowsingInstance = LANBrowsing.listen(port, '0.0.0.0', () => {
-      sendMessageToWebContents(`LAN browsing listening at http://0.0.0.0:${port}`)
+      sendLANMessage('LAN browsing listening at')
     })
   }
 }
