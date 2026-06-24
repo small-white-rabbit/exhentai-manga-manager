@@ -186,9 +186,15 @@ export const useAppStore = defineStore('appStore', {
     },
     printMessage(type, msg) {
       ElMessage.closeAll()
+      const hasNewline = typeof msg === 'string' && msg.includes('\n')
+      let message = msg
+      if (hasNewline) {
+        message = msg.split('\n').map((line, i) => `<div style="${i > 0 ? 'margin-top:8px;color:#67C23A;' : ''}">${line}</div>`).join('')
+      }
       ElMessage[type]({
-        message: msg,
-        offset: 50
+        message,
+        offset: 50,
+        dangerouslyUseHTMLString: hasNewline
       })
     },
     returnFileNameWithExt (filepath) {
