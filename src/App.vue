@@ -1,5 +1,10 @@
 <template>
   <el-config-provider :locale="localeFile">
+    <el-tabs v-if="setting.enableNovel" v-model="activeTab" class="app-tabs">
+      <el-tab-pane label="漫画" name="manga"></el-tab-pane>
+      <el-tab-pane label="小说" name="novel" lazy></el-tab-pane>
+    </el-tabs>
+    <template v-if="!setting.enableNovel || activeTab === 'manga'">
     <div id="progressbar" :style="{ width: progress + '%' }"></div>
     <el-button class="fullscreen-button" circle :icon="FullScreen" size="large" @click="switchFullscreen"></el-button>
     <el-row :gutter="20" class="book-search-bar">
@@ -229,11 +234,13 @@
     <TagGraph ref="TagGraphRef" @search="handleSearchString"/>
     <SearchDialog ref="SearchDialogRef"/>
     <Setting ref="SettingRef" @load-book-list="loadBookList" @load-collection-list="loadCollectionList"/>
+    </template>
+    <NovelLibrary v-if="setting.enableNovel && activeTab === 'novel'" />
   </el-config-provider>
 </template>
 
 <script>
-import { defineComponent, toRaw } from 'vue'
+import { defineComponent, defineAsyncComponent, toRaw } from 'vue'
 import { Setting as SettingIcon, FullScreen, Edit } from '@element-plus/icons-vue'
 import { ArrowTrendingLines20Filled, Collections24Regular, Search32Filled, Save16Regular } from '@vicons/fluent'
 import { MdShuffle, MdRefresh, MdCodeDownload, MdExit } from '@vicons/ionicons4'
@@ -255,6 +262,8 @@ import RandomTags from './components/RandomTags.vue'
 import { mapWritableState, mapActions } from 'pinia'
 import { useAppStore } from './pinia.js'
 
+const NovelLibrary = defineAsyncComponent(() => import('./novel/views/NovelLibrary.vue'))
+
 export default defineComponent({
   components: {
     Setting,
@@ -267,6 +276,7 @@ export default defineComponent({
     BookCardCollection,
     EditView,
     RandomTags,
+    NovelLibrary,
   },
   setup () {
     return {
@@ -295,6 +305,8 @@ export default defineComponent({
       moveFileDialogVisible: false,
       moveFileTargetBook: null,
       moveFileTargetFolder: null,
+      // novel tabs
+      activeTab: 'manga',
     }
   },
   computed: {
@@ -1369,6 +1381,14 @@ body
   font-family: Avenir, Helvetica, Arial, sans-serif
   text-align: center
   margin-top: 20px
+
+.app-tabs
+  height: 100vh
+  display: flex
+  flex-direction: column
+.app-tabs :deep(.el-tabs__content)
+  flex: 1
+  overflow: hidden
 
 @keyframes striped-flow
   0%
