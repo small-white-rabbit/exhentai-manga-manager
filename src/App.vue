@@ -1,18 +1,16 @@
 <template>
   <el-config-provider :locale="localeFile">
-    <div v-if="setting.enableNovel" class="mode-switcher">
-      <div class="mode-icon" :class="{ active: activeTab === 'manga' }" @click="activeTab = 'manga'" title="漫画">
-        <el-icon :size="22"><Reading /></el-icon>
-      </div>
-      <div class="mode-icon" :class="{ active: activeTab === 'novel' }" @click="activeTab = 'novel'" title="小说">
-        <el-icon :size="22"><Document /></el-icon>
-      </div>
-    </div>
     <template v-if="!setting.enableNovel || activeTab === 'manga'">
     <div id="progressbar" :style="{ width: progress + '%' }"></div>
     <el-button class="fullscreen-button" circle :icon="FullScreen" size="large" @click="switchFullscreen"></el-button>
     <el-row :gutter="20" class="book-search-bar">
-      <el-col :span="1" :offset="2">
+      <el-col :span="2" :offset="2">
+        <el-button-group v-if="setting.enableNovel">
+          <el-button :type="activeTab === 'manga' ? 'primary' : ''" :icon="Reading" @click="activeTab = 'manga'" title="漫画"></el-button>
+          <el-button :type="activeTab === 'novel' ? 'primary' : ''" :icon="Document" @click="activeTab = 'novel'" title="小说"></el-button>
+        </el-button-group>
+      </el-col>
+      <el-col :span="1">
         <el-button type="primary" :icon="TreeViewAlt" plain @click="$refs.FolderTreeRef.openFolderTree()" :title="$t('m.folderTree')"></el-button>
       </el-col>
       <el-col :span="8">
@@ -239,7 +237,7 @@
     <SearchDialog ref="SearchDialogRef"/>
     <Setting ref="SettingRef" @load-book-list="loadBookList" @load-collection-list="loadCollectionList"/>
     </template>
-    <NovelLibrary v-if="setting.enableNovel && activeTab === 'novel'" />
+    <NovelLibrary v-if="setting.enableNovel && activeTab === 'novel'" @switch="activeTab = $event" />
   </el-config-provider>
 </template>
 
@@ -1385,36 +1383,6 @@ body
   font-family: Avenir, Helvetica, Arial, sans-serif
   text-align: center
   margin-top: 20px
-
-.mode-switcher
-  position: fixed
-  left: 0
-  top: 0
-  width: 48px
-  height: 100vh
-  background: var(--el-bg-color, #1a1a1a)
-  border-right: 1px solid var(--el-border-color, #333)
-  display: flex
-  flex-direction: column
-  align-items: center
-  padding-top: 12px
-  gap: 8px
-  z-index: 2000
-.mode-icon
-  width: 40px
-  height: 40px
-  border-radius: 8px
-  display: flex
-  align-items: center
-  justify-content: center
-  cursor: pointer
-  color: var(--el-text-color-secondary, #888)
-  transition: background 0.15s, color 0.15s
-.mode-icon:hover
-  background: var(--el-fill-color-light, #2a2a2a)
-.mode-icon.active
-  background: var(--el-color-primary-light-8, rgba(64,158,255,0.15))
-  color: var(--el-color-primary, #409eff)
 
 @keyframes striped-flow
   0%

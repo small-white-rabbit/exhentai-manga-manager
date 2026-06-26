@@ -1,9 +1,17 @@
 <template>
   <div class="novel-library">
-    <div class="library-toolbar">
-      <el-button type="primary" @click="store.scanNovelLibrary" :icon="Refresh">扫描小说库</el-button>
-      <el-button @click="store.importNovel" :icon="Plus">导入单本</el-button>
-    </div>
+    <el-row class="library-top-bar" :gutter="20">
+      <el-col :span="2" :offset="2">
+        <el-button-group>
+          <el-button :icon="Reading" @click="$emit('switch', 'manga')" title="漫画"></el-button>
+          <el-button type="primary" :icon="Document" title="小说"></el-button>
+        </el-button-group>
+      </el-col>
+      <el-col :span="6">
+        <el-button type="primary" @click="store.scanNovelLibrary" :icon="Refresh">扫描小说库</el-button>
+        <el-button @click="store.importNovel" :icon="Plus">导入单本</el-button>
+      </el-col>
+    </el-row>
 
     <div v-if="store.loading" class="library-empty">扫描中...</div>
     <div v-else-if="store.novelList.length === 0" class="library-empty">
@@ -29,7 +37,7 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { Plus, Refresh } from '@element-plus/icons-vue'
+import { Plus, Refresh, Reading, Document } from '@element-plus/icons-vue'
 import { useNovelStore } from '../stores/novel'
 import NovelCard from '../components/NovelCard.vue'
 import NovelReader from '../components/NovelReader.vue'
@@ -64,8 +72,10 @@ onMounted(async () => {
   height: 100%;
   overflow-y: auto;
   padding: 16px;
-  margin-left: 48px;
   box-sizing: border-box;
+}
+.library-top-bar {
+  margin-bottom: 12px;
 }
 .library-toolbar {
   display: flex;
