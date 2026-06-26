@@ -28,11 +28,13 @@ try {
 const TEMP_PATH = path.join(STORE_PATH, 'tmp')
 const COVER_PATH = path.join(STORE_PATH, 'cover')
 const VIEWER_PATH = path.join(STORE_PATH, 'viewer')
+const NOVEL_FONT_PATH = path.join(STORE_PATH, 'fonts')
 
 const preparePath = () => {
   fs.mkdirSync(TEMP_PATH, { recursive: true })
   fs.mkdirSync(COVER_PATH, { recursive: true })
   fs.mkdirSync(VIEWER_PATH, { recursive: true })
+  fs.mkdirSync(NOVEL_FONT_PATH, { recursive: true })
 }
 
 const _mange_reader = `"${path.join(getRootPath(), 'resources/extraResources/manga_reader.exe')}"`
@@ -77,6 +79,23 @@ const prepareSetting = () => {
       concurrentScan: 4,
       concurrentWrite: 2,
       excludeFile: '',
+      enableNovel: false,
+      novel: {
+        fontSource: 'builtin',        // builtin | import | system
+        fontFamily: 'JingHuaLaoSongTi',
+        fontSize: 18,
+        lineHeight: 1.8,
+        indent: 2,
+        collapseBlank: true,
+        theme: 'eye',                 // light | dark | eye | custom
+        bgColor: '#f5deb3',
+        fgColor: '#5b4636',
+        colorize: true,
+        highlightWords: [],
+        stickyChapterTitle: true,
+        readerWidth: 800
+      },
+      novelLibraries: []
     }
     fs.writeFileSync(path.join(STORE_PATH, 'setting.json'), JSON.stringify(setting, null, '  '), { encoding: 'utf-8' })
   }
@@ -106,6 +125,7 @@ module.exports = {
   TEMP_PATH,
   COVER_PATH,
   VIEWER_PATH,
+  NOVEL_FONT_PATH,
   prepareSetting,
   prepareCollectionList,
   preparePath,
