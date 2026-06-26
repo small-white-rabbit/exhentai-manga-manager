@@ -11,19 +11,35 @@
       <el-tab-pane :label="$t('m.general')" name="general">
         <el-row :gutter="8">
           <el-col :span="24">
-            <div class="setting-line libraries-list">
-              <div v-for="(lib, idx) in (setting.libraries || [])" :key="idx" class="library-row">
-                <el-input v-model="setting.libraries[idx]">
-                  <template #prepend><span class="setting-label">{{$t('m.library')}} {{idx + 1}}</span></template>
+              <div class="setting-line libraries-list">
+                <div v-for="(lib, idx) in (setting.libraries || [])" :key="idx" class="library-row">
+                  <el-input v-model="setting.libraries[idx]">
+                    <template #prepend><span class="setting-label">{{$t('m.library')}} {{idx + 1}}</span></template>
+                    <template #append>
+                      <el-button-group>
+                        <el-button @click="selectLibraryPath(idx)">{{$t('m.select')}}</el-button>
+                        <el-button :icon="Delete" @click="removeLibraryPath(idx)"></el-button>
+                      </el-button-group>
+                    </template>
+                  </el-input>
+                </div>
+                <el-button plain @click="addLibraryPath">{{$t('m.addLibrary')}}</el-button>
+              </div>
+            </el-col>
+          <el-col :span="24">
+            <div class="setting-line libraries-list" v-if="setting.enableNovel">
+              <div class="setting-subtitle">小说库目录</div>
+              <div v-for="(lib, idx) in (setting.novelLibraries || [])" :key="'nl'+idx" class="library-row">
+                <el-input v-model="setting.novelLibraries[idx]">
                   <template #append>
                     <el-button-group>
-                      <el-button @click="selectLibraryPath(idx)">{{$t('m.select')}}</el-button>
-                      <el-button :icon="Delete" @click="removeLibraryPath(idx)"></el-button>
+                      <el-button @click="selectNovelLibraryPath(idx)">选择</el-button>
+                      <el-button :icon="Delete" @click="removeNovelLibraryPath(idx)"></el-button>
                     </el-button-group>
                   </template>
                 </el-input>
               </div>
-              <el-button plain @click="addLibraryPath">{{$t('m.addLibrary')}}</el-button>
+              <el-button plain @click="addNovelLibraryPath">+ 添加小说库</el-button>
             </div>
           </el-col>
           <el-col :span="24">
@@ -600,6 +616,29 @@ const addLibraryPath = () => {
 const removeLibraryPath = (idx) => {
   if (!Array.isArray(setting.value.libraries)) return
   setting.value.libraries.splice(idx, 1)
+  saveSetting()
+}
+
+const selectNovelLibraryPath = (idx) => {
+  ipcRenderer.invoke('select-folder', '小说库')
+  .then(res => {
+    if (res) {
+      if (!Array.isArray(setting.value.novelLibraries)) setting.value.novelLibraries = []
+      setting.value.novelLibraries[idx] = res
+      saveSetting()
+    }
+  })
+}
+
+const addNovelLibraryPath = () => {
+  if (!Array.isArray(setting.value.novelLibraries)) setting.value.novelLibraries = []
+  setting.value.novelLibraries.push('')
+  saveSetting()
+}
+
+const removeNovelLibraryPath = (idx) => {
+  if (!Array.isArray(setting.value.novelLibraries)) return
+  setting.value.novelLibraries.splice(idx, 1)
   saveSetting()
 }
 
