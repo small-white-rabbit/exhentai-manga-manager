@@ -19,7 +19,7 @@ const { globSync } = require('glob')
 const { performance } = require('node:perf_hooks')
 const os = require('os')
 
-const { prepareMangaModel, prepareMetadataModel, ensureMetaTable, installRevTriggers } = require('./modules/database')
+const { prepareMangaModel, prepareMetadataModel, ensureMetaTable, installRevTriggers, prepareNovelModels } = require('./modules/database')
 const { prepareTemplate } = require('./modules/prepare_menu.js')
 const { getBookFilelist, geneCoverFromBuffer, getImageListByBook, getImageListByBookFast, extractImageByBook, deleteImageFromBook } = require('./fileLoader/index.js')
 const { saveAppCache, LoadVerifyCache } = require('./src/services/appCache.js')
@@ -27,10 +27,13 @@ const {
   STORE_PATH, isPortable,
   TEMP_PATH, COVER_PATH, VIEWER_PATH,
   prepareSetting, prepareCollectionList, preparePath,
+  NOVEL_FONT_PATH,
   _mange_reader
 } = require('./modules/init_folder_setting.js')
 const { findSameFile } = require('./fileLoader/folder.js')
 const { makeShardedPath } = require('./fileLoader/utils.js')
+const { importNovel, readTxtChapter, readEpubChapter } = require('./novel_loader/index')
+const fontList = require('font-list')
 
 preparePath()
 let setting = prepareSetting()
@@ -47,6 +50,18 @@ if (setting.metadataPath) {
   metadataSqliteFile = path.join(STORE_PATH, './metadata.sqlite')
 }
 let Metadata = prepareMetadataModel(metadataSqliteFile)
+let Novel, NovelChapter, NovelBookmark
+if (setting.enableNovel) {
+  const novelModels = prepareNovelModels(path.join(STORE_PATH, './database.sqlite'))
+  Novel = novelModels.Novel
+  NovelChapter = novelModels.NovelChapter
+  NovelBookmark = novelModels.NovelBookmark
+  ;(async () => {
+    await Novel.sync()
+    await NovelChapter.sync()
+    await NovelBookmark.sync()
+  })()
+}
 const getColumns = async (sequelize, tableName) => {
   const query = `PRAGMA table_info(${tableName})`
   const [results] = await sequelize.query(query)
@@ -2586,6 +2601,120 @@ const enableLANBrowsing = () => {
       sendLANMessage('LAN browsing listening at')
     })
   }
+}
+
+// ==================== novel ====================
+if (setting.enableNovel) {
+  ipcMain.handle('novel:list', async () => {
+    const list = await Novel.findAll({ order: [['date', 'DESC']] })
+    return list.map(n => {
+      const obj = n.toJSON()
+      obj.readProgress = obj.readProgress || { chapterIdx: 0, charOffset: 0 }
+      return obj
+    })
+  })
+
+  ipcMain.handle('novel:import-dialog', async (event) => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: '导入小说',
+      properties: ['openFile'],
+      filters: [{ name: '小说', extensions: ['txt', 'epub'] }]
+    })
+    if (result.canceled || !result.filePaths.length) return null
+    const filepath = result.filePaths[0]
+    try {
+      const imported = await importNovel(filepath)
+      const novelRow = {
+        id: imported.id,
+        hash: imported.hash,
+        filepath: imported.filepath,
+        filename: imported.filename,
+        type: imported.type,
+        filesize: imported.filesize,
+        encoding: imported.encoding,
+        title: imported.title,
+        author: imported.author,
+        status: 'non-tag',
+        chapterCount: imported.chapters.length,
+        date: Date.now()
+      }
+      if (imported.coverBuffer) {
+        const sharp = require('sharp')
+        const coverPath = path.join(COVER_PATH, imported.id + '.webp')
+        await sharp(imported.coverBuffer).resize(500, 707, { fit: 'contain', background: '#303133' }).toFile(coverPath)
+        novelRow.coverPath = coverPath
+      }
+      await Novel.upsert(novelRow)
+      await NovelChapter.destroy({ where: { novelId: imported.id } })
+      await NovelChapter.bulkCreate(imported.chapters.map(c => ({
+        id: c.id,
+        novelId: imported.id,
+        index: c.index,
+        title: c.title,
+        startOffset: c.startOffset,
+        endOffset: c.endOffset,
+        charCount: c.charCount
+      })))
+      sendMessageToWebContents(`Imported novel: ${imported.title} (${imported.chapters.length} chapters)`)
+      return imported.id
+    } catch (e) {
+      sendMessageToWebContents(`Import novel failed: ${e.message}`)
+      return null
+    }
+  })
+
+  ipcMain.handle('novel:chapters', async (event, novelId) => {
+    return await NovelChapter.findAll({ where: { novelId }, order: [['index', 'ASC']], raw: true })
+  })
+
+  ipcMain.handle('novel:read-chapter', async (event, novelId, chapterIdx) => {
+    const novel = await Novel.findByPk(novelId)
+    if (!novel) throw new Error('Novel not found')
+    const chapter = await NovelChapter.findOne({ where: { novelId, index: chapterIdx } })
+    if (!chapter) throw new Error('Chapter not found')
+    if (novel.type === 'txt') {
+      return await readTxtChapter(novel, chapter)
+    } else {
+      return await readEpubChapter(novel, chapterIdx)
+    }
+  })
+
+  ipcMain.handle('novel:save-progress', async (event, novelId, progress) => {
+    await Novel.update({ readProgress: progress }, { where: { id: novelId } })
+  })
+
+  ipcMain.handle('novel:system-fonts', async () => {
+    try {
+      return await fontList.getFonts()
+    } catch (e) {
+      console.log('get system fonts failed', e)
+      return []
+    }
+  })
+
+  ipcMain.handle('novel:imported-fonts', async () => {
+    try {
+      const files = await fs.promises.readdir(NOVEL_FONT_PATH)
+      return files
+        .filter(f => /\.(ttf|otf|woff2?|ttf)$/i.test(f))
+        .map(f => f.replace(/\.(ttf|otf|woff2?|ttf)$/i, ''))
+    } catch {
+      return []
+    }
+  })
+
+  ipcMain.handle('novel:import-font-dialog', async (event) => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: '导入字体',
+      properties: ['openFile'],
+      filters: [{ name: '字体', extensions: ['ttf', 'otf', 'woff', 'woff2'] }]
+    })
+    if (result.canceled || !result.filePaths.length) return null
+    const src = result.filePaths[0]
+    const dst = path.join(NOVEL_FONT_PATH, path.basename(src))
+    await fs.promises.copyFile(src, dst)
+    return dst
+  })
 }
 
 ipcMain.handle('enable-LAN-browsing', async (event, arg) => {
