@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ElMessage } from 'element-plus'
+import './novel/stores/novel'
 
 export const useAppStore = defineStore('appStore', {
   state: () => ({
