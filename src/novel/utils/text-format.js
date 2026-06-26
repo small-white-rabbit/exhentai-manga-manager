@@ -20,4 +20,4 @@ const collapseBlankLines = (text) => {
   return text.replace(/\n{3,}/g, '\n\n').replace(/^\s+|\s+$/g, '')
 }
 
-module.exports = { applyIndent, collapseBlankLines }
+export { applyIndent, collapseBlankLines }

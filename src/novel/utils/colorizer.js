@@ -76,4 +76,4 @@ const colorize = (text, highlightWords = []) => {
   return result
 }
 
-module.exports = { RULES, colorize, escapeHtml }
+export { RULES, colorize, escapeHtml }
