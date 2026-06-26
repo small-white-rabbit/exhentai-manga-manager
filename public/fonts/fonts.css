@@ -1,0 +1,22 @@
+/* 内置阅读字体 @font-face 声明
+   字体文件放在 public/fonts/ 目录下，文件名需与下方一致。
+   缺失的字体文件会自动 fallback 到系统字体（font-display: swap）。
+   霞鹜文楷: https://github.com/lxgw/LxgwWenKai/releases (OFL 1.1)
+   京華老宋体: 从 ColorTxt resources/ 抽取 (仅供学习交流)
+   浪漫雅圆: 用户提供 (仅供个人学习使用，不分发商用)
+*/
+@font-face {
+  font-family: 'JingHuaLaoSongTi';
+  src: url('/fonts/JingHuaLaoSongTi.woff2') format('woff2');
+  font-display: swap;
+}
+@font-face {
+  font-family: 'LXGWWenKai';
+  src: url('/fonts/LXGWWenKai.woff2') format('woff2');
+  font-display: swap;
+}
+@font-face {
+  font-family: 'LangManYaYuan';
+  src: url('/fonts/LangManYaYuan.woff2') format('woff2');
+  font-display: swap;
+}
