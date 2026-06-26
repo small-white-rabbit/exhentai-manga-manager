@@ -1,9 +1,13 @@
 <template>
   <el-config-provider :locale="localeFile">
-    <el-tabs v-if="setting.enableNovel" v-model="activeTab" class="app-tabs">
-      <el-tab-pane label="漫画" name="manga"></el-tab-pane>
-      <el-tab-pane label="小说" name="novel" lazy></el-tab-pane>
-    </el-tabs>
+    <div v-if="setting.enableNovel" class="mode-switcher">
+      <div class="mode-icon" :class="{ active: activeTab === 'manga' }" @click="activeTab = 'manga'" title="漫画">
+        <el-icon :size="22"><Reading /></el-icon>
+      </div>
+      <div class="mode-icon" :class="{ active: activeTab === 'novel' }" @click="activeTab = 'novel'" title="小说">
+        <el-icon :size="22"><Document /></el-icon>
+      </div>
+    </div>
     <template v-if="!setting.enableNovel || activeTab === 'manga'">
     <div id="progressbar" :style="{ width: progress + '%' }"></div>
     <el-button class="fullscreen-button" circle :icon="FullScreen" size="large" @click="switchFullscreen"></el-button>
@@ -241,7 +245,7 @@
 
 <script>
 import { defineComponent, defineAsyncComponent, toRaw } from 'vue'
-import { Setting as SettingIcon, FullScreen, Edit } from '@element-plus/icons-vue'
+import { Setting as SettingIcon, FullScreen, Edit, Reading, Document } from '@element-plus/icons-vue'
 import { ArrowTrendingLines20Filled, Collections24Regular, Search32Filled, Save16Regular } from '@vicons/fluent'
 import { MdShuffle, MdRefresh, MdCodeDownload, MdExit } from '@vicons/ionicons4'
 import { TreeViewAlt, CicsSystemGroup, TagGroup } from '@vicons/carbon'
@@ -280,7 +284,7 @@ export default defineComponent({
   },
   setup () {
     return {
-      SettingIcon, FullScreen, Edit,
+      SettingIcon, FullScreen, Edit, Reading, Document,
       Collections24Regular, Search32Filled, ArrowTrendingLines20Filled, Save16Regular,
       MdRefresh, MdCodeDownload, MdExit, MdShuffle,
       TreeViewAlt, CicsSystemGroup, TagGroup
@@ -1382,13 +1386,35 @@ body
   text-align: center
   margin-top: 20px
 
-.app-tabs
+.mode-switcher
+  position: fixed
+  left: 0
+  top: 0
+  width: 48px
   height: 100vh
+  background: var(--el-bg-color, #1a1a1a)
+  border-right: 1px solid var(--el-border-color, #333)
   display: flex
   flex-direction: column
-.app-tabs :deep(.el-tabs__content)
-  flex: 1
-  overflow: hidden
+  align-items: center
+  padding-top: 12px
+  gap: 8px
+  z-index: 2000
+.mode-icon
+  width: 40px
+  height: 40px
+  border-radius: 8px
+  display: flex
+  align-items: center
+  justify-content: center
+  cursor: pointer
+  color: var(--el-text-color-secondary, #888)
+  transition: background 0.15s, color 0.15s
+.mode-icon:hover
+  background: var(--el-fill-color-light, #2a2a2a)
+.mode-icon.active
+  background: var(--el-color-primary-light-8, rgba(64,158,255,0.15))
+  color: var(--el-color-primary, #409eff)
 
 @keyframes striped-flow
   0%

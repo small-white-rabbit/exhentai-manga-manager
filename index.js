@@ -33,6 +33,7 @@ const {
 const { findSameFile } = require('./fileLoader/folder.js')
 const { makeShardedPath } = require('./fileLoader/utils.js')
 const { importNovel, readTxtChapter, readEpubChapter } = require('./novel_loader/index')
+const { scanNovelFiles } = require('./novel_loader/filelist')
 const fontList = require('font-list')
 
 preparePath()
@@ -2612,6 +2613,68 @@ if (setting.enableNovel) {
       obj.readProgress = obj.readProgress || { chapterIdx: 0, charOffset: 0 }
       return obj
     })
+  })
+
+  ipcMain.handle('novel:scan-library', async (event) => {
+    sendMessageToWebContents('开始扫描小说库')
+    const libraries = Array.isArray(setting.novelLibraries) ? setting.novelLibraries.filter(Boolean) : []
+    if (!libraries.length) {
+      sendMessageToWebContents('未配置小说库目录')
+      return { added: 0, total: 0 }
+    }
+    const dbNovels = await Novel.findAll({ raw: true })
+    const byFilepath = new Map(dbNovels.map(n => [n.filepath, n]))
+    for (const n of dbNovels) n.exist = false
+
+    let list = await scanNovelFiles(libraries)
+    const pattern = (setting.excludeFile || '').trim()
+    if (pattern) {
+      const excludeRe = new RegExp(pattern)
+      list = list.filter(item => !excludeRe.test(item.filepath))
+    }
+
+    let added = 0
+    for (const item of list) {
+      const existing = byFilepath.get(item.filepath)
+      if (existing) {
+        existing.exist = true
+        if (existing.status === 'missing') {
+          await Novel.update({ exist: true, status: 'non-tag' }, { where: { id: existing.id } })
+        } else {
+          await Novel.update({ exist: true }, { where: { id: existing.id } })
+        }
+        continue
+      }
+      try {
+        const imported = await importNovel(item.filepath)
+        const novelRow = {
+          id: imported.id, hash: imported.hash, filepath: imported.filepath,
+          filename: imported.filename, type: imported.type, filesize: imported.filesize,
+          encoding: imported.encoding, title: imported.title, author: imported.author,
+          status: 'non-tag', chapterCount: imported.chapters.length,
+          exist: true, date: Date.now()
+        }
+        if (imported.coverBuffer) {
+          const sharp = require('sharp')
+          const coverPath = path.join(COVER_PATH, imported.id + '.webp')
+          await sharp(imported.coverBuffer).resize(500, 707, { fit: 'contain', background: '#303133' }).toFile(coverPath)
+          novelRow.coverPath = coverPath
+        }
+        await Novel.upsert(novelRow)
+        await NovelChapter.destroy({ where: { novelId: imported.id } })
+        await NovelChapter.bulkCreate(imported.chapters.map(c => ({
+          id: c.id, novelId: imported.id, index: c.index, title: c.title,
+          startOffset: c.startOffset, endOffset: c.endOffset, charCount: c.charCount
+        })))
+        added++
+      } catch (e) {
+        sendMessageToWebContents(`导入失败: ${item.filepath} - ${e.message}`)
+      }
+    }
+    // 仍 exist=false 的标记为 missing
+    await Novel.update({ status: 'missing' }, { where: { exist: false } })
+    sendMessageToWebContents(`扫描完成: 新增 ${added} 本，共 ${list.length} 本`)
+    return { added, total: list.length }
   })
 
   ipcMain.handle('novel:import-dialog', async (event) => {

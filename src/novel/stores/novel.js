@@ -23,6 +23,15 @@ export const useNovelStore = defineStore('novel', {
       if (!result) return
       await this.loadNovelList()
     },
+    async scanNovelLibrary() {
+      this.loading = true
+      try {
+        await window.ipcRenderer.invoke('novel:scan-library')
+        await this.loadNovelList()
+      } finally {
+        this.loading = false
+      }
+    },
     async openNovel(novel) {
       this.currentNovel = novel
       this.chapters = await window.ipcRenderer.invoke('novel:chapters', novel.id)

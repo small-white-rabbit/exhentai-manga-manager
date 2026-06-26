@@ -1,13 +1,13 @@
 <template>
   <div class="novel-library">
     <div class="library-toolbar">
-      <el-button type="primary" @click="store.importNovel" :icon="Plus">导入小说</el-button>
-      <el-button @click="store.loadNovelList" :icon="Refresh">刷新</el-button>
+      <el-button type="primary" @click="store.scanNovelLibrary" :icon="Refresh">扫描小说库</el-button>
+      <el-button @click="store.importNovel" :icon="Plus">导入单本</el-button>
     </div>
 
-    <div v-if="store.loading" class="library-empty">加载中...</div>
+    <div v-if="store.loading" class="library-empty">扫描中...</div>
     <div v-else-if="store.novelList.length === 0" class="library-empty">
-      还没有小说，点击「导入小说」开始
+      还没有小说，请先在设置中添加小说库目录，再点击「扫描小说库」
     </div>
     <div v-else class="library-grid">
       <NovelCard
@@ -64,6 +64,8 @@ onMounted(async () => {
   height: 100%;
   overflow-y: auto;
   padding: 16px;
+  margin-left: 48px;
+  box-sizing: border-box;
 }
 .library-toolbar {
   display: flex;
