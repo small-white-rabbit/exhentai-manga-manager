@@ -1,15 +1,15 @@
 <template>
   <el-config-provider :locale="localeFile">
-    <template v-if="!setting.enableNovel || activeTab === 'manga'">
     <div id="progressbar" :style="{ width: progress + '%' }"></div>
     <el-button class="fullscreen-button" circle :icon="FullScreen" size="large" @click="switchFullscreen"></el-button>
     <el-row :gutter="20" class="book-search-bar">
-      <el-col :span="2" :offset="2">
+      <el-col :span="2" :offset="1">
         <el-button-group v-if="setting.enableNovel">
           <el-button :type="activeTab === 'manga' ? 'primary' : ''" :icon="Reading" @click="activeTab = 'manga'" title="漫画"></el-button>
           <el-button :type="activeTab === 'novel' ? 'primary' : ''" :icon="Document" @click="activeTab = 'novel'" title="小说"></el-button>
         </el-button-group>
       </el-col>
+      <template v-if="!setting.enableNovel || activeTab === 'manga'">
       <el-col :span="1">
         <el-button type="primary" :icon="TreeViewAlt" plain @click="$refs.FolderTreeRef.openFolderTree()" :title="$t('m.folderTree')"></el-button>
       </el-col>
@@ -105,7 +105,20 @@
           </el-col>
         </el-row>
       </el-col>
+      </template>
+      <template v-if="setting.enableNovel && activeTab === 'novel'">
+      <el-col :span="3">
+        <el-button type="primary" @click="$refs.NovelLibraryRef && $refs.NovelLibraryRef.scanNovelLibrary()" :icon="MdRefresh" title="扫描小说库">扫描</el-button>
+      </el-col>
+      <el-col :span="2">
+        <el-button @click="$refs.NovelLibraryRef && $refs.NovelLibraryRef.importNovel()" :icon="Plus" title="导入单本">导入</el-button>
+      </el-col>
+      <el-col :span="1">
+        <el-button :icon="SettingIcon" plain @click="$refs.SettingRef.dialogVisibleSetting = true" :title="$t('m.setting')"></el-button>
+      </el-col>
+      </template>
     </el-row>
+    <template v-if="!setting.enableNovel || activeTab === 'manga'">
     <RandomTags
       ref="randomTagsRef"
       v-if="!editTagView && !editCollectionView && !setting.disableRandomTag"
@@ -235,15 +248,15 @@
     <FolderTree ref="FolderTreeRef" @chunk-list="chunkList"/>
     <TagGraph ref="TagGraphRef" @search="handleSearchString"/>
     <SearchDialog ref="SearchDialogRef"/>
-    <Setting ref="SettingRef" @load-book-list="loadBookList" @load-collection-list="loadCollectionList"/>
     </template>
-    <NovelLibrary v-if="setting.enableNovel && activeTab === 'novel'" @switch="activeTab = $event" />
+    <Setting ref="SettingRef" @load-book-list="loadBookList" @load-collection-list="loadCollectionList"/>
+    <NovelLibrary ref="NovelLibraryRef" v-if="setting.enableNovel && activeTab === 'novel'" />
   </el-config-provider>
 </template>
 
 <script>
 import { defineComponent, defineAsyncComponent, toRaw } from 'vue'
-import { Setting as SettingIcon, FullScreen, Edit, Reading, Document } from '@element-plus/icons-vue'
+import { Setting as SettingIcon, FullScreen, Edit, Reading, Document, Plus } from '@element-plus/icons-vue'
 import { ArrowTrendingLines20Filled, Collections24Regular, Search32Filled, Save16Regular } from '@vicons/fluent'
 import { MdShuffle, MdRefresh, MdCodeDownload, MdExit } from '@vicons/ionicons4'
 import { TreeViewAlt, CicsSystemGroup, TagGroup } from '@vicons/carbon'
@@ -282,7 +295,7 @@ export default defineComponent({
   },
   setup () {
     return {
-      SettingIcon, FullScreen, Edit, Reading, Document,
+      SettingIcon, FullScreen, Edit, Reading, Document, Plus,
       Collections24Regular, Search32Filled, ArrowTrendingLines20Filled, Save16Regular,
       MdRefresh, MdCodeDownload, MdExit, MdShuffle,
       TreeViewAlt, CicsSystemGroup, TagGroup

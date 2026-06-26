@@ -1,11 +1,9 @@
 <template>
-  <div class="novel-reader" :style="readerStyle">
+  <div class="novel-reader-overlay" :style="readerStyle">
     <div class="reader-top-bar">
-      <el-button @click="$emit('back')" :icon="ArrowLeft">返回</el-button>
-      <div class="reader-title" v-if="settings.stickyChapterTitle">
-        {{ currentChapterTitle }}
-      </div>
-      <el-button @click="settingsVisible = true" :icon="Setting">设置</el-button>
+      <el-button @click="$emit('back')" :icon="ArrowLeft" size="small">返回书库</el-button>
+      <div class="reader-title">{{ store.currentNovel?.title }}</div>
+      <el-button @click="settingsVisible = true" :icon="Setting" size="small">设置</el-button>
     </div>
 
     <div class="reader-body">
@@ -15,20 +13,24 @@
           :key="ch.id"
           class="chapter-item"
           :class="{ active: ch.index === store.currentChapterIndex }"
-          @click="store.loadChapter(ch.index)"
+          @click="jumpToChapter(ch.index)"
         >
           {{ ch.title }}
         </div>
       </div>
 
-      <div class="chapter-content" ref="contentRef" :style="contentStyle">
-        <div v-if="settings.colorize" v-html="renderedHtml"></div>
-        <div v-else class="plain-text">{{ renderedText }}</div>
-
-        <div class="chapter-nav">
-          <el-button @click="prevChapter" :disabled="store.currentChapterIndex <= 0">上一章</el-button>
-          <el-button @click="nextChapter" :disabled="store.currentChapterIndex >= store.chapters.length - 1">下一章</el-button>
+      <div class="chapter-content" ref="contentRef" :style="contentStyle" @scroll="onScroll">
+        <div
+          v-for="(seg, i) in loadedChapters"
+          :key="i"
+          class="chapter-segment"
+        >
+          <div class="segment-title" v-if="settings.stickyChapterTitle !== false">{{ seg.title }}</div>
+          <div v-if="settings.colorize" v-html="seg.html"></div>
+          <div v-else class="plain-text">{{ seg.text }}</div>
         </div>
+        <div v-if="loadingMore" class="loading-more">加载下一章...</div>
+        <div v-if="noMore" class="loading-more">已是最后一章</div>
       </div>
     </div>
 
@@ -63,25 +65,61 @@ const importedFonts = ref([])
 const systemFonts = ref([])
 
 const settings = ref({ ...props.settings })
-watch(() => props.settings, v => { settings.value = { ...v } })
+watch(() => props.settings, v => { settings.value = { ...v } }, { deep: true })
 
-const currentChapterTitle = computed(() => {
-  const ch = store.chapters[store.currentChapterIndex]
-  return ch ? ch.title : ''
-})
+// 流式加载：已加载的章节段
+const loadedChapters = ref([])
+const loadingMore = ref(false)
+const noMore = ref(false)
 
-const processedText = computed(() => {
-  let text = store.currentChapterText || ''
-  if (settings.value.collapseBlank) text = collapseBlankLines(text)
-  if (settings.value.indent) text = applyIndent(text, settings.value.indent)
-  return text
-})
+const processText = (text) => {
+  let t = text || ''
+  if (settings.value.collapseBlank) t = collapseBlankLines(t)
+  if (settings.value.indent) t = applyIndent(t, settings.value.indent)
+  return t
+}
 
-const renderedHtml = computed(() => {
-  return colorize(processedText.value, settings.value.highlightWords || [])
-})
+const buildSegment = (title, text) => {
+  const processed = processText(text)
+  return {
+    title,
+    text: processed,
+    html: colorize(processed, settings.value.highlightWords || [])
+  }
+}
 
-const renderedText = computed(() => processedText.value)
+// 加载指定章节并重置流式列表
+const jumpToChapter = async (idx) => {
+  await store.loadChapter(idx)
+  loadedChapters.value = [buildSegment(store.chapters[idx]?.title || '', store.currentChapterText)]
+  noMore.value = idx >= store.chapters.length - 1
+  nextTick(() => { contentRef.value && (contentRef.value.scrollTop = 0) })
+}
+
+// 流式加载下一章
+const loadNext = async () => {
+  if (loadingMore.value || noMore.value) return
+  const nextIdx = store.currentChapterIndex + loadedChapters.value.length
+  if (nextIdx >= store.chapters.length) {
+    noMore.value = true
+    return
+  }
+  loadingMore.value = true
+  try {
+    const text = await window.ipcRenderer.invoke('novel:read-chapter', store.currentNovel.id, nextIdx)
+    loadedChapters.value.push(buildSegment(store.chapters[nextIdx]?.title || '', text))
+  } finally {
+    loadingMore.value = false
+  }
+}
+
+const onScroll = () => {
+  const el = contentRef.value
+  if (!el) return
+  if (el.scrollHeight - el.scrollTop - el.clientHeight < 300) {
+    loadNext()
+  }
+}
 
 const readerStyle = computed(() => {
   const theme = settings.value.theme
@@ -93,37 +131,26 @@ const readerStyle = computed(() => {
     background: bg,
     color: fg,
     fontFamily: fontStack.value,
-    fontSize: settings.value.fontSize + 'px',
-    lineHeight: settings.value.lineHeight
+    fontSize: (settings.value.fontSize || 18) + 'px',
+    lineHeight: settings.value.lineHeight || 1.8
   }
 })
 
 const fontStack = computed(() => {
   const f = settings.value.fontFamily
   if (!f) return 'inherit'
-  return `"${f}", serif`
+  return `"${f}", "Microsoft YaHei", serif`
 })
 
 const contentStyle = computed(() => ({
-  maxWidth: settings.value.readerWidth + 'px',
+  maxWidth: (settings.value.readerWidth || 800) + 'px',
   margin: '0 auto'
 }))
 
-const prevChapter = () => {
-  if (store.currentChapterIndex > 0) {
-    store.loadChapter(store.currentChapterIndex - 1)
-    nextTick(() => { contentRef.value && (contentRef.value.scrollTop = 0) })
-  }
-}
-const nextChapter = () => {
-  if (store.currentChapterIndex < store.chapters.length - 1) {
-    store.loadChapter(store.currentChapterIndex + 1)
-    nextTick(() => { contentRef.value && (contentRef.value.scrollTop = 0) })
-  }
-}
-
 const onSettingsChange = (newSettings) => {
   settings.value = newSettings
+  // 重新渲染已加载章节
+  loadedChapters.value = loadedChapters.value.map(seg => buildSegment(seg.title, seg.text))
   emit('update-settings', newSettings)
 }
 
@@ -134,16 +161,39 @@ const importFont = async () => {
   }
 }
 
+// 初始化：加载当前章节
+const initChapter = async () => {
+  if (store.currentNovel && store.currentChapterText) {
+    loadedChapters.value = [buildSegment(
+      store.chapters[store.currentChapterIndex]?.title || '',
+      store.currentChapterText
+    )]
+    noMore.value = store.currentChapterIndex >= store.chapters.length - 1
+  }
+}
+
 onMounted(async () => {
   systemFonts.value = await window.ipcRenderer.invoke('novel:system-fonts')
   importedFonts.value = await window.ipcRenderer.invoke('novel:imported-fonts')
+  await initChapter()
+})
+
+// 监听 store 章节变化（首次打开书时）
+watch(() => store.currentChapterText, () => {
+  if (loadedChapters.value.length === 0) {
+    initChapter()
+  }
 })
 </script>
 
 <style scoped>
-.novel-reader {
-  width: 100%;
-  height: 100%;
+.novel-reader-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 3000;
   display: flex;
   flex-direction: column;
 }
@@ -151,14 +201,18 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 16px;
-  background: rgba(0,0,0,0.05);
+  padding: 6px 16px;
+  background: rgba(0,0,0,0.08);
   border-bottom: 1px solid rgba(0,0,0,0.1);
+  flex-shrink: 0;
 }
 .reader-title {
   flex: 1;
   font-size: 14px;
   text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .reader-body {
   flex: 1;
@@ -166,10 +220,11 @@ onMounted(async () => {
   overflow: hidden;
 }
 .chapter-list {
-  width: 240px;
+  width: 220px;
   overflow-y: auto;
   border-right: 1px solid rgba(0,0,0,0.1);
   padding: 8px 0;
+  flex-shrink: 0;
 }
 .chapter-item {
   padding: 8px 16px;
@@ -182,16 +237,23 @@ onMounted(async () => {
   flex: 1;
   overflow-y: auto;
   padding: 32px 48px 80px;
-  white-space: pre-wrap;
-  word-break: break-word;
+}
+.chapter-segment {
+  margin-bottom: 48px;
+}
+.segment-title {
+  font-size: 1.2em;
+  font-weight: bold;
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(128,128,128,0.2);
 }
 .plain-text { white-space: pre-wrap; }
-.chapter-nav {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 48px;
-  padding-top: 24px;
-  border-top: 1px solid rgba(0,0,0,0.1);
+.loading-more {
+  text-align: center;
+  padding: 24px;
+  color: rgba(128,128,128,0.6);
+  font-size: 13px;
 }
 
 /* 上色 class */
