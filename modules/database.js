@@ -1,5 +1,7 @@
 const { Sequelize, DataTypes } = require('sequelize')
 
+const { prepareNovelModels } = require('./novel_database')
+
 const prepareMangaModel = (databasePath) => {
   const sequelize = new Sequelize({
     dialect: 'sqlite',
@@ -151,6 +153,7 @@ async function installRevTriggers(sequelize, tableName, prefix) {
 module.exports = {
   prepareMangaModel,
   prepareMetadataModel,
+  prepareNovelModels,
   ensureMetaTable,
   installRevTriggers
 }
