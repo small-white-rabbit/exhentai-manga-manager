@@ -14,10 +14,15 @@ const applyIndent = (text, indent) => {
 }
 
 /**
- * 空行压缩：连续 3+ 个换行压缩为 2 个（即一个空行）。
+ * 空行压缩（参照 ColorTxt compressBlankLines）：
+ * - 去除所有空行（连续换行压缩为单个换行），段落靠首行缩进或连续排版区分
+ * - 去除首尾空白
  */
 const collapseBlankLines = (text) => {
-  return text.replace(/\n{3,}/g, '\n\n').replace(/^\s+|\s+$/g, '')
+  return text
+    .replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+    .replace(/\n{2,}/g, '\n')
+    .replace(/^\s+|\s+$/g, '')
 }
 
 export { applyIndent, collapseBlankLines }

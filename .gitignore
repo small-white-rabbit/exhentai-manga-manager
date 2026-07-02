@@ -16,6 +16,10 @@ data
 secret_key.json
 resources/extraResources/manga_reader.exe
 
+# Novel reader font files (large binary assets, user-provided)
+public/fonts/*.ttf
+public/fonts/*.woff2
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

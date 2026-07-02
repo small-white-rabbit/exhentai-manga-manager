@@ -20,9 +20,12 @@ const getNovelFilelist = async (library) => {
       if (entry.isDirectory()) {
         await walk(full)
       } else if (entry.isFile()) {
-        const ext = path.extname(entry.name).toLowerCase()
-        if (ext === '.txt') result.push({ filepath: full, type: 'txt' })
-        else if (ext === '.epub') result.push({ filepath: full, type: 'epub' })
+        const nameLower = entry.name.toLowerCase()
+      const ext = path.extname(nameLower)
+      // 排除 epub→txt 转换产生的缓存文件（ColorTxt 风格：epub 转为 .txt 后，原始 epub 仍保留在列表中）
+      if (nameLower.endsWith('.epub.txt')) continue
+      if (ext === '.txt') result.push({ filepath: full, type: 'txt' })
+      else if (ext === '.epub') result.push({ filepath: full, type: 'epub' })
       }
     }
   }

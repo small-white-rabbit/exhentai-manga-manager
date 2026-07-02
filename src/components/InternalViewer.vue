@@ -957,7 +957,9 @@ const saveImageStyleFit = () => {
 }
 
 const saveHidePageNumber = _.debounce(() => {
-  ipcRenderer.invoke('save-setting', _.cloneDeep(setting.value))
+  // 排除 novel 键：避免用启动时的旧值覆盖 NovelLibrary 最新保存的小说设置
+  const { novel, ...rest } = _.cloneDeep(setting.value)
+  ipcRenderer.invoke('save-setting', rest)
 }, 500)
 
 const handleClickThumbnail = (id) => {

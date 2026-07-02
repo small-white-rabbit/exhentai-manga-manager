@@ -797,7 +797,9 @@ const handleLanguageSet = async (languageCode) => {
 }
 
 const saveSetting = _.debounce(() => {
-  ipcRenderer.invoke('save-setting', _.cloneDeep(setting.value))
+  // 排除 novel 键：novel 设置由 NovelLibrary 独立管理，避免此处用启动时的旧值覆盖最新小说设置
+  const { novel, ...rest } = _.cloneDeep(setting.value)
+  ipcRenderer.invoke('save-setting', rest)
 }, 500)
 
 const openLink = (link) => {

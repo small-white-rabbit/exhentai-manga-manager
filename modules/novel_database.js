@@ -1,10 +1,5 @@
 const { Sequelize, DataTypes } = require('sequelize')
 
-/**
- * 准备 Novel 相关模型。复用现有 sqlite 文件（与 Manga 同库不同表），
- * 避免引入第二个 sequelize 实例和跨库 ATTACH 复杂度。
- * @param {string} databasePath 与 Manga 相同的 database.sqlite 路径
- */
 const prepareNovelModels = (databasePath) => {
   const sequelize = new Sequelize({
     dialect: 'sqlite',
@@ -17,9 +12,9 @@ const prepareNovelModels = (databasePath) => {
     hash: DataTypes.TEXT,
     filepath: DataTypes.TEXT,
     filename: DataTypes.TEXT,
-    type: DataTypes.TEXT,          // txt | epub
+    type: DataTypes.TEXT,
     filesize: DataTypes.INTEGER,
-    encoding: DataTypes.TEXT,      // txt 的字符编码
+    encoding: DataTypes.TEXT,
     title: DataTypes.TEXT,
     author: DataTypes.TEXT,
     coverPath: DataTypes.TEXT,
@@ -29,7 +24,8 @@ const prepareNovelModels = (databasePath) => {
     readProgress: { type: DataTypes.JSON, defaultValue: { chapterIdx: 0, charOffset: 0 } },
     readCount: { type: DataTypes.INTEGER, defaultValue: 0 },
     exist: { type: DataTypes.BOOLEAN, defaultValue: true },
-    date: DataTypes.INTEGER
+    date: DataTypes.INTEGER,
+    lastReadAt: DataTypes.INTEGER
   }, {
     indexes: [{ name: 'novel_hash_index', unique: false, fields: ['hash'] }],
     tableName: 'Novels',
@@ -41,9 +37,12 @@ const prepareNovelModels = (databasePath) => {
     novelId: { type: DataTypes.TEXT, allowNull: false },
     index: { type: DataTypes.INTEGER, allowNull: false },
     title: DataTypes.TEXT,
-    startOffset: DataTypes.INTEGER,   // 字节偏移
+    startOffset: DataTypes.INTEGER,
     endOffset: DataTypes.INTEGER,
-    charCount: DataTypes.INTEGER
+    byteStartOffset: DataTypes.INTEGER,
+    byteEndOffset: DataTypes.INTEGER,
+    charCount: DataTypes.INTEGER,
+    text: DataTypes.TEXT
   }, {
     indexes: [{ name: 'novel_chapter_novel_index', fields: ['novelId', 'index'] }],
     tableName: 'NovelChapters',
@@ -63,7 +62,6 @@ const prepareNovelModels = (databasePath) => {
     freezeTableName: true
   })
 
-  // 外键级联：删 Novel 时自动删其 Chapter 和 Bookmark
   Novel.hasMany(NovelChapter, { foreignKey: 'novelId', onDelete: 'CASCADE', hooks: true })
   NovelChapter.belongsTo(Novel, { foreignKey: 'novelId' })
   Novel.hasMany(NovelBookmark, { foreignKey: 'novelId', onDelete: 'CASCADE', hooks: true })

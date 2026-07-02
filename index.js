@@ -19,6 +19,15 @@ const { globSync } = require('glob')
 const { performance } = require('node:perf_hooks')
 const os = require('os')
 
+let CRASH_LOG_PATH = null
+
+const initCrashLog = () => {
+  CRASH_LOG_PATH = path.join(app.getPath('userData'), 'crash-logs')
+  if (!fs.existsSync(CRASH_LOG_PATH)) {
+    try { fs.mkdirSync(CRASH_LOG_PATH, { recursive: true }) } catch (e) {}
+  }
+}
+
 const { prepareMangaModel, prepareMetadataModel, ensureMetaTable, installRevTriggers, prepareNovelModels } = require('./modules/database')
 const { prepareTemplate } = require('./modules/prepare_menu.js')
 const { getBookFilelist, geneCoverFromBuffer, getImageListByBook, getImageListByBookFast, extractImageByBook, deleteImageFromBook } = require('./fileLoader/index.js')
@@ -32,8 +41,10 @@ const {
 } = require('./modules/init_folder_setting.js')
 const { findSameFile } = require('./fileLoader/folder.js')
 const { makeShardedPath } = require('./fileLoader/utils.js')
-const { importNovel, readTxtChapter, readEpubChapter } = require('./novel_loader/index')
+const { importNovel, readTxtChapter, readEpubChapter, readFullText } = require('./novel_loader/index')
+const { DEFAULT_RULES: CHAPTER_RULES } = require('./src/novel/utils/chapter-detector')
 const { scanNovelFiles } = require('./novel_loader/filelist')
+const { synthesizeEdgeTtsMp3, EDGE_TTS_ZH_VOICES } = require('./novel_loader/edgeTts')
 const fontList = require('font-list')
 
 preparePath()
@@ -52,69 +63,123 @@ if (setting.metadataPath) {
 }
 let Metadata = prepareMetadataModel(metadataSqliteFile)
 let Novel, NovelChapter, NovelBookmark
+const getColumns = async (sequelize, tableName) => {
+  const query = `PRAGMA table_info(${tableName})`
+  const [results] = await sequelize.query(query)
+  return results.map(column => column.name)
+}
 if (setting.enableNovel) {
   const novelModels = prepareNovelModels(path.join(STORE_PATH, './database.sqlite'))
   Novel = novelModels.Novel
   NovelChapter = novelModels.NovelChapter
   NovelBookmark = novelModels.NovelBookmark
   ;(async () => {
-    await Novel.sync()
-    await NovelChapter.sync()
-    await NovelBookmark.sync()
+    try {
+      // 检查并添加 lastReadAt 列（如果不存在）
+      const novelColumns = await getColumns(Novel.sequelize, 'Novels')
+      if (!novelColumns.includes('lastReadAt')) {
+        await Novel.sequelize.query('ALTER TABLE Novels ADD COLUMN lastReadAt INTEGER')
+      }
+      // 检查并添加 text 列到 NovelChapters（epub 章节正文）
+      const chapterColumns = await getColumns(NovelChapter.sequelize, 'NovelChapters')
+      if (!chapterColumns.includes('text')) {
+        await NovelChapter.sequelize.query('ALTER TABLE NovelChapters ADD COLUMN text TEXT')
+      }
+      if (!chapterColumns.includes('byteStartOffset')) {
+        await NovelChapter.sequelize.query('ALTER TABLE NovelChapters ADD COLUMN byteStartOffset INTEGER')
+      }
+      if (!chapterColumns.includes('byteEndOffset')) {
+        await NovelChapter.sequelize.query('ALTER TABLE NovelChapters ADD COLUMN byteEndOffset INTEGER')
+      }
+      await Novel.sync()
+      await NovelChapter.sync()
+      await NovelBookmark.sync()
+    } catch (e) {
+      console.error('[init] 小说数据库初始化失败:', e)
+    }
   })()
 }
-const getColumns = async (sequelize, tableName) => {
-  const query = `PRAGMA table_info(${tableName})`
-  const [results] = await sequelize.query(query)
-  return results.map(column => column.name)
-}
 ;(async () => {
-  await Manga.sequelize.query(`PRAGMA journal_mode=WAL;`)
-  await Manga.sequelize.query(`PRAGMA busy_timeout=10000;`)
-  await Metadata.sequelize.query(`PRAGMA journal_mode=WAL;`)
-  await Metadata.sequelize.query(`PRAGMA busy_timeout=10000;`)
+    try {
+      await Manga.sequelize.query(`PRAGMA busy_timeout=10000;`)
+      await Metadata.sequelize.query(`PRAGMA busy_timeout=10000;`)
 
-  const columns = await getColumns(Manga.sequelize, 'Mangas')
-  if (['hiddenBook', 'readCount'].some(c => !columns.includes(c))) {
-    await Manga.sync({ alter: true })
-  } else {
-    await Manga.sync()
-  }
-  await Metadata.sync()
+      const columns = await getColumns(Manga.sequelize, 'Mangas')
+      if (['hiddenBook', 'readCount'].some(c => !columns.includes(c))) {
+        await Manga.sync({ alter: true })
+      } else {
+        await Manga.sync()
+      }
 
-  // add meta table and revision triggers for startup cache invalidation
-  await ensureMetaTable(Manga.sequelize)
-  await installRevTriggers(Manga.sequelize, 'Mangas', 'mm')
-  await ensureMetaTable(Metadata.sequelize)
-  await installRevTriggers(Metadata.sequelize, 'Metadata', 'mm')
-})()
+      if (!columns.includes('readProgress')) {
+        await Manga.sequelize.query('ALTER TABLE Mangas ADD COLUMN readProgress TEXT')
+      }
+      if (!columns.includes('lastReadAt')) {
+        await Manga.sequelize.query('ALTER TABLE Mangas ADD COLUMN lastReadAt INTEGER')
+      }
 
-const logFile = fs.createWriteStream(path.join(STORE_PATH, 'log.txt'), { flags: 'w' })
+      try {
+        await Metadata.sync()
+        await ensureMetaTable(Metadata.sequelize)
+        await installRevTriggers(Metadata.sequelize, 'Metadata', 'mm')
+      } catch (e) {
+        console.warn('[init] metadata数据库同步失败，降级运行:', e.message)
+      }
+
+      // add meta table and revision triggers for startup cache invalidation
+      await ensureMetaTable(Manga.sequelize)
+      await installRevTriggers(Manga.sequelize, 'Mangas', 'mm')
+    } catch (e) {
+      console.error('[init] 数据库初始化失败:', e)
+    }
+  })()
+
+let logFile = null
+try {
+  logFile = fs.createWriteStream(path.join(STORE_PATH, 'log.txt'), { flags: 'a' })
+  logFile.on('error', () => { logFile = null })
+} catch (e) {
+  logFile = null
+}
 const logStdout = process.stdout
 const logStderr = process.stderr
 
 console.log = (...message) => {
-  logFile.write(format(...message) + '\n')
-  logStdout.write(format(...message) + '\n')
+  const msg = format(...message) + '\n'
+  if (logFile) { try { logFile.write(msg) } catch(e) {} }
+  logStdout.write(msg)
 }
 
 console.error = (...message) => {
-  logFile.write(format(...message) + '\n')
-  logStderr.write(format(...message) + '\n')
+  const msg = format(...message) + '\n'
+  if (logFile) { try { logFile.write(msg) } catch(e) {} }
+  logStderr.write(msg)
 }
 
-process
-  .on('unhandledRejection', (reason, promise) => {
-    console.log('Unhandled Rejection at:', promise, 'reason:', reason)
+process.on('unhandledRejection', (reason, promise) => {
+    const mem = process.memoryUsage()
+    console.error(`[${new Date().toISOString()}] Unhandled Rejection at:`, promise, 'reason:', reason)
+    console.error(`[${new Date().toISOString()}] Memory: RSS=${(mem.rss/1024/1024).toFixed(2)}MB, Heap=${(mem.heapUsed/1024/1024).toFixed(2)}MB`)
   })
   .on('uncaughtException', err => {
-    console.log(err, 'Uncaught Exception thrown')
-    process.exit(1)
+    const mem = process.memoryUsage()
+    console.error(`[${new Date().toISOString()}] Uncaught Exception thrown:`, err)
+    console.error(`[${new Date().toISOString()}] Stack:`, err.stack)
+    console.error(`[${new Date().toISOString()}] Memory: RSS=${(mem.rss/1024/1024).toFixed(2)}MB, Heap=${(mem.heapUsed/1024/1024).toFixed(2)}MB`)
+    try {
+      sendMessageToWebContents(`程序错误: ${err.message}`)
+    } catch (e) {}
   })
 
 const sendMessageToWebContents = (message) => {
   console.log(message)
-  mainWindow.webContents.send('send-message', message)
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try {
+      mainWindow.webContents.send('send-message', message)
+    } catch (e) {
+      console.error('Failed to send message:', e)
+    }
+  }
 }
 
 const getLanIP = () => {
@@ -244,13 +309,18 @@ const createWindow = () => {
 
     ipcMain.once('app-cache:reply-snap', async (_evt, snap) => {
       clearTimeout(timer)
-      if (snap) {
-        latestAppCache.data = latestAppCache.data || {}
-        latestAppCache.data.bookList = snap
-        console.log('snap close')
-        await saveAppCache(latestAppCache, APP_CACHE_PATH, Manga.sequelize, Metadata.sequelize)
+      try {
+        if (snap) {
+          latestAppCache.data = latestAppCache.data || {}
+          latestAppCache.data.bookList = snap
+          console.log('snap close')
+          await saveAppCache(latestAppCache, APP_CACHE_PATH, Manga.sequelize, Metadata.sequelize)
+        }
+      } catch (e) {
+        console.error('saveAppCache on close failed:', e)
+      } finally {
+        finish()
       }
-      finish()
     })
 
     win.webContents.send('app-cache:request-bookList-snap')
@@ -288,6 +358,7 @@ app.on('activate', () => {
 })
 
 app.on('ready', async () => {
+  initCrashLog()
   if (setting.proxy) {
     await session.defaultSession.setProxy({
       mode: 'fixed_servers',
@@ -344,72 +415,77 @@ const loadBookListFromDatabase = async () => {
   // Fast path: use a single SQL JOIN with COALESCE instead of loading everything into JS
   const mainStorage = Manga.sequelize.options.storage
   if (mainStorage && metadataSqliteFile && path.resolve(mainStorage) !== path.resolve(metadataSqliteFile)) {
-    await Manga.sequelize.transaction(async (t) => {
-      // Ensure metadata DB is attached
-      const rows = await Manga.sequelize.query('PRAGMA database_list', { type: QueryTypes.SELECT, transaction: t })
-      const alias = 'meta'
-      const hit = rows.find(r => r.name === alias)
-      if (!hit) {
-        await Manga.sequelize.query(`ATTACH DATABASE $p AS ${alias}`, { bind: { p: metadataSqliteFile }, transaction: t })
-      } else if (path.resolve(hit.file || '') !== path.resolve(metadataSqliteFile)) {
-        await Manga.sequelize.query(`DETACH DATABASE ${alias}`, { transaction: t })
-        await Manga.sequelize.query(`ATTACH DATABASE $p AS ${alias}`, { bind: { p: metadataSqliteFile }, transaction: t })
-      }
+    try {
+      await Manga.sequelize.transaction(async (t) => {
+        // Ensure metadata DB is attached
+        const rows = await Manga.sequelize.query('PRAGMA database_list', { type: QueryTypes.SELECT, transaction: t })
+        const alias = 'meta'
+        const hit = rows.find(r => r.name === alias)
+        if (!hit) {
+          await Manga.sequelize.query(`ATTACH DATABASE $p AS ${alias}`, { bind: { p: metadataSqliteFile }, transaction: t })
+        } else if (path.resolve(hit.file || '') !== path.resolve(metadataSqliteFile)) {
+          await Manga.sequelize.query(`DETACH DATABASE ${alias}`, { transaction: t })
+          await Manga.sequelize.query(`ATTACH DATABASE $p AS ${alias}`, { bind: { p: metadataSqliteFile }, transaction: t })
+        }
 
-      // Seed metadata table from Mangas when metadata row is missing
-      await Manga.sequelize.query(`
-        INSERT INTO meta.Metadata (hash, title, status, rating, tags, title_jpn, filecount, posted, filesize, category, url, mark, createdAt, updatedAt)
-        SELECT m.hash, m.title, m.status, m.rating, m.tags, m.title_jpn, m.filecount, m.posted, m.filesize, m.category, m.url, m.mark, m.createdAt, m.updatedAt
-        FROM main.Mangas AS m
-        WHERE NOT EXISTS (SELECT 1 FROM meta.Metadata AS md WHERE md.hash = m.hash)
-          AND m.rowid = (SELECT MIN(m2.rowid) FROM main.Mangas m2 WHERE m2.hash = m.hash);
-      `, { transaction: t })
+        // Seed metadata table from Mangas when metadata row is missing
+        await Manga.sequelize.query(`
+          INSERT INTO meta.Metadata (hash, title, status, rating, tags, title_jpn, filecount, posted, filesize, category, url, mark, createdAt, updatedAt)
+          SELECT m.hash, m.title, m.status, m.rating, m.tags, m.title_jpn, m.filecount, m.posted, m.filesize, m.category, m.url, m.mark, m.createdAt, m.updatedAt
+          FROM main.Mangas AS m
+          WHERE NOT EXISTS (SELECT 1 FROM meta.Metadata AS md WHERE md.hash = m.hash)
+            AND m.rowid = (SELECT MIN(m2.rowid) FROM main.Mangas m2 WHERE m2.hash = m.hash);
+        `, { transaction: t })
 
-      // Update Mangas from Metadata when metadata has better status
-      await Manga.sequelize.query(`
-        UPDATE main.Mangas AS m
-        SET
-          title = COALESCE(md.title, m.title),
-          rating = COALESCE(md.rating, m.rating),
-          tags = COALESCE(md.tags, m.tags),
-          title_jpn = COALESCE(md.title_jpn, m.title_jpn),
-          filecount = COALESCE(md.filecount, m.filecount),
-          posted = COALESCE(md.posted, m.posted),
-          filesize = COALESCE(md.filesize, m.filesize),
-          category = COALESCE(md.category, m.category),
-          url = COALESCE(md.url, m.url),
-          mark = COALESCE(md.mark, m.mark),
-          status = COALESCE(md.status, m.status),
-          createdAt = COALESCE(md.createdAt, m.createdAt),
-          updatedAt = COALESCE(md.updatedAt, m.updatedAt)
-        FROM meta.Metadata AS md
-        WHERE md.hash = m.hash
-          AND m.status = 'non-tag'
-          AND COALESCE(md.status, 'non-tag') <> 'non-tag';
-      `, { transaction: t })
+        // Update Mangas from Metadata when metadata has better status
+        await Manga.sequelize.query(`
+          UPDATE main.Mangas AS m
+          SET
+            title = COALESCE(md.title, m.title),
+            rating = COALESCE(md.rating, m.rating),
+            tags = COALESCE(md.tags, m.tags),
+            title_jpn = COALESCE(md.title_jpn, m.title_jpn),
+            filecount = COALESCE(md.filecount, m.filecount),
+            posted = COALESCE(md.posted, m.posted),
+            filesize = COALESCE(md.filesize, m.filesize),
+            category = COALESCE(md.category, m.category),
+            url = COALESCE(md.url, m.url),
+            mark = COALESCE(md.mark, m.mark),
+            status = COALESCE(md.status, m.status),
+            createdAt = COALESCE(md.createdAt, m.createdAt),
+            updatedAt = COALESCE(md.updatedAt, m.updatedAt)
+          FROM meta.Metadata AS md
+          WHERE md.hash = m.hash
+            AND m.status = 'non-tag'
+            AND COALESCE(md.status, 'non-tag') <> 'non-tag';
+        `, { transaction: t })
 
-      // Load joined book list
-      bookList = await Manga.sequelize.query(`
-        SELECT
-          m.id, m.hash, m.coverPath, m.filepath, m.type, m.pageCount,
-          m.bundleSize, m.mtime, m.coverHash, m.hiddenBook, m.readCount, m.exist, m.date,
-          COALESCE(md.title, m.title) AS title,
-          COALESCE(md.status, m.status) AS status,
-          COALESCE(md.rating, m.rating) AS rating,
-          COALESCE(md.tags, m.tags, '{}') AS tags,
-          COALESCE(md.title_jpn, m.title_jpn) AS title_jpn,
-          COALESCE(md.filecount, m.filecount) AS filecount,
-          COALESCE(md.posted, m.posted) AS posted,
-          COALESCE(md.filesize, m.filesize) AS filesize,
-          COALESCE(md.category, m.category) AS category,
-          COALESCE(md.url, m.url) AS url,
-          COALESCE(md.mark, m.mark) AS mark,
-          COALESCE(md.createdAt, m.createdAt) AS createdAt,
-          COALESCE(md.updatedAt, m.updatedAt) AS updatedAt
-        FROM main.Mangas m
-        LEFT JOIN meta.Metadata md ON md.hash = m.hash;
-      `, { type: QueryTypes.SELECT, transaction: t })
-    })
+        // Load joined book list
+        bookList = await Manga.sequelize.query(`
+          SELECT
+            m.id, m.hash, m.coverPath, m.filepath, m.type, m.pageCount,
+            m.bundleSize, m.mtime, m.coverHash, m.hiddenBook, m.readCount, m.exist, m.date,
+            COALESCE(md.title, m.title) AS title,
+            COALESCE(md.status, m.status) AS status,
+            COALESCE(md.rating, m.rating) AS rating,
+            COALESCE(md.tags, m.tags, '{}') AS tags,
+            COALESCE(md.title_jpn, m.title_jpn) AS title_jpn,
+            COALESCE(md.filecount, m.filecount) AS filecount,
+            COALESCE(md.posted, m.posted) AS posted,
+            COALESCE(md.filesize, m.filesize) AS filesize,
+            COALESCE(md.category, m.category) AS category,
+            COALESCE(md.url, m.url) AS url,
+            COALESCE(md.mark, m.mark) AS mark,
+            COALESCE(md.createdAt, m.createdAt) AS createdAt,
+            COALESCE(md.updatedAt, m.updatedAt) AS updatedAt
+          FROM main.Mangas m
+          LEFT JOIN meta.Metadata md ON md.hash = m.hash;
+        `, { type: QueryTypes.SELECT, transaction: t })
+      })
+    } catch (e) {
+      console.warn('[loadBookList] ATTACH metadata失败，使用降级方案:', e.message)
+      // 降级：只用主数据库
+    }
   } else {
     // Fallback to original JS loop when DB paths are the same (should not happen normally)
     let metadataList = await Metadata.findAll()
@@ -430,14 +506,21 @@ const loadBookListFromDatabase = async () => {
 
   // Parse JSON tags
   for (const b of bookList) {
-    b.tags = JSON.parse(b.tags || '{}')
+    if (typeof b.tags === 'string') {
+      try {
+        b.tags = JSON.parse(b.tags || '{}')
+      } catch (e) {
+        b.tags = {}
+      }
+    } else if (!b.tags) {
+      b.tags = {}
+    }
   }
   setProgressBar(-1)
   return bookList
 }
 
 const saveBookListToDatabase = async (data) => {
-  console.log('Empty Exist BookList and Saved New BookList')
   await Manga.destroy({ truncate: true })
   await Manga.bulkCreate(data)
 }
@@ -445,7 +528,6 @@ const saveBookListToDatabase = async (data) => {
 const saveBookToDatabase = async (book) => {
   await Manga.update(book, { where: { id: book.id } })
   await Metadata.upsert(book)
-  console.log(`Saved ${book.title}`)
 }
 
 const setProgressBar = (progress) => {
@@ -1119,6 +1201,12 @@ ipcMain.handle('show-file', async (event, filepath) => {
   shell.showItemInFolder(filepath)
 })
 
+ipcMain.handle('app:toggle-devtools', async () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.toggleDevTools()
+  }
+})
+
 ipcMain.handle('capture-screenshot-cover', async (event, rect) => {
   try {
     const image = await mainWindow.webContents.capturePage(rect)
@@ -1497,6 +1585,11 @@ async function saveSettingExclusive(next) {
         pending = null
         const prev = setting
         const merged = { ...prev, ...patch }
+        // novel 子对象深合并：NovelLibrary 只传 { novel: {...} } 增量，
+        // 其它页面（Setting/InternalViewer）已排除 novel 键，这里再做一层保护避免整体覆盖丢字段
+        if (prev.novel && patch.novel && typeof prev.novel === 'object' && typeof patch.novel === 'object') {
+          merged.novel = { ...prev.novel, ...patch.novel }
+        }
         await applySideEffects(prev, merged) // missing settings in the later will not override the previous ones
         await atomicWriteSettings(merged)
         setting = merged
@@ -1673,7 +1766,10 @@ ipcMain.on('get-path-sep', async (event, arg) => {
 })
 
 
-const WEB_READER_HTML = `<!DOCTYPE html>
+const WEB_READER_HTML_PATH = path.join(__dirname, 'web', 'index.html')
+const WEB_READER_HTML = fs.existsSync(WEB_READER_HTML_PATH)
+  ? fs.readFileSync(WEB_READER_HTML_PATH, 'utf-8')
+  : `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
@@ -2236,9 +2332,8 @@ const WEB_READER_HTML = `<!DOCTYPE html>
 </body>
 </html>
 `
-
-// 初始化Express
 const LANBrowsing = express()
+LANBrowsing.use(express.json({ limit: '10mb' }))
 const port = 23786
 const sortkey_map = {
   "date_added": {
@@ -2265,6 +2360,10 @@ const sortkey_map = {
     key: "readCount",
     type: "number"
   },
+  "lastread": {
+    key: "lastReadAt",
+    type: "number"
+  },
   "random": {}
 }
 
@@ -2289,6 +2388,16 @@ LANBrowsing.get('/web', (req, res) => {
 LANBrowsing.get('/web/', (req, res) => {
   res.set('Content-Type', 'text/html; charset=utf-8')
   res.send(WEB_READER_HTML)
+})
+
+LANBrowsing.get('/icon.ico', (req, res) => {
+  const iconPath = path.join(__dirname, 'public/icon.ico')
+  if (fs.existsSync(iconPath)) {
+    res.set('Content-Type', 'image/x-icon')
+    res.sendFile(iconPath)
+  } else {
+    res.status(404).send()
+  }
 })
 
 let tagTranslation = undefined
@@ -2337,8 +2446,8 @@ LANBrowsing.get('/api/search', async (req, res) => {
     const filter = req.query.filter || ''
     const start = parseInt(req.query.start, 10) || 0
     const length = parseInt(req.query.length, 10) || 200
-    // 默认使用阅读次数排序, 来匹配 mihon 热门不带 sortby
-    let sortKey = req.query.sortby || 'read_count'
+    // 默认使用最近阅读排序
+    let sortKey = req.query.sortby || 'lastread'
     let showAll = false
     if (sortKey.includes("_all")) {
       sortKey = sortKey.replace("_all", "")
@@ -2459,17 +2568,21 @@ LANBrowsing.get('/api/archives/:hash/metadata', async (req, res) => {
 
 // 处理封面图片请求
 LANBrowsing.get('/api/archives/:hash/thumbnail', async (req, res) => {
-  const hash = req.params.hash
-  const manga = await Manga.findOne({where: {hash: hash}})
-  if (!manga || !manga.coverPath) {
-    return res.status(404).send('Cover not found')
-  }
-  const coverFilePath = path.join(staticFilePath, path.basename(manga.coverPath))
-  await fs.promises.copyFile(manga.coverPath, coverFilePath)
-  if (fs.existsSync(coverFilePath)) {
-    res.sendFile(coverFilePath)
-  } else {
-    res.status(404).send('Cover file not found')
+  try {
+    const hash = req.params.hash
+    const manga = await Manga.findOne({where: {hash: hash}})
+    if (!manga || !manga.coverPath) {
+      return res.status(404).send('Cover not found')
+    }
+    const coverFilePath = manga.coverPath
+    if (fs.existsSync(coverFilePath)) {
+      res.sendFile(coverFilePath)
+    } else {
+      res.status(404).send('Cover file not found')
+    }
+  } catch (e) {
+    console.error('Thumbnail error:', e)
+    res.status(500).send('Thumbnail error')
   }
 })
 
@@ -2571,6 +2684,313 @@ LANBrowsing.get('/reader', async (req, res) => {
   }
 })
 
+// ==================== reading progress LAN API ====================
+LANBrowsing.get('/api/progress/:type/:id', async (req, res) => {
+  try {
+    const { type, id } = req.params
+    if (type === 'novel') {
+      if (!setting.enableNovel || !Novel) {
+        return res.json(null)
+      }
+      const novel = await Novel.findByPk(id)
+      if (!novel) return res.json(null)
+      const progress = typeof novel.readProgress === 'string' ? JSON.parse(novel.readProgress) : novel.readProgress || null
+      return res.json({
+        progress,
+        lastReadAt: novel.lastReadAt
+      })
+    } else if (type === 'manga') {
+      const manga = await Manga.findByPk(id)
+      if (!manga) return res.json(null)
+      const progress = manga.readProgress ? JSON.parse(manga.readProgress) : null
+      return res.json({
+        progress,
+        lastReadAt: manga.lastReadAt
+      })
+    }
+    res.status(400).json({ error: 'Invalid type' })
+  } catch (e) {
+    console.error('Get progress error:', e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+LANBrowsing.post('/api/progress/:type/:id', async (req, res) => {
+  try {
+    const { type, id } = req.params
+    const { progress } = req.body
+    if (!progress) {
+      return res.status(400).json({ error: 'Progress is required' })
+    }
+    if (type === 'novel') {
+      if (!setting.enableNovel || !Novel) {
+        return res.status(404).json({ error: 'Novel disabled' })
+      }
+      await Novel.update({
+        readProgress: JSON.stringify(progress),
+        lastReadAt: Date.now()
+      }, { where: { id } })
+      res.json({ success: true })
+    } else if (type === 'manga') {
+      await Manga.update({
+        readProgress: JSON.stringify(progress),
+        lastReadAt: Date.now()
+      }, { where: { id } })
+      res.json({ success: true })
+    } else {
+      res.status(400).json({ error: 'Invalid type' })
+    }
+  } catch (e) {
+    console.error('Save progress error:', e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ==================== novel LAN API ====================
+
+const _chapterTitleCache = new WeakMap()
+const _isChapterTitleLine = (line) => {
+  const trimmed = line.trim()
+  if (!trimmed) return false
+  let cache = _chapterTitleCache.get(CHAPTER_RULES)
+  if (!cache) {
+    cache = CHAPTER_RULES.map(r => new RegExp(r.pattern.source, r.pattern.flags.replace('g', '')))
+    _chapterTitleCache.set(CHAPTER_RULES, cache)
+  }
+  for (const re of cache) {
+    re.lastIndex = 0
+    if (re.test(trimmed)) return true
+  }
+  return false
+}
+
+const stripChapterTextEdges = (text, chapterTitle) => {
+  if (!text) return text
+  let result = text
+
+  if (chapterTitle) {
+    const titleLower = chapterTitle.toLowerCase()
+    const resultLower = result.trimStart().toLowerCase()
+    if (resultLower.startsWith(titleLower)) {
+      let offset = chapterTitle.length
+      const trimmedStart = result.trimStart()
+      let lineEnd = offset
+      while (lineEnd < trimmedStart.length && trimmedStart[lineEnd] !== '\n' && trimmedStart[lineEnd] !== '\r') {
+        lineEnd++
+      }
+      const remainingOnLine = trimmedStart.slice(offset, lineEnd).trim()
+      if (remainingOnLine.length <= 30) {
+        offset = lineEnd
+      }
+      while (offset < trimmedStart.length && /\s/.test(trimmedStart[offset])) offset++
+      result = trimmedStart.slice(offset)
+    }
+  }
+
+  const lines = result.split('\n')
+
+  if (lines.length > 0 && chapterTitle) {
+    const firstLine = lines[0].trim()
+    if (firstLine.length > 0 && firstLine.length <= 10 && chapterTitle.endsWith(firstLine)) {
+      lines.shift()
+    }
+  }
+
+  if (lines.length > 0) {
+    const firstLine = lines[0].trim()
+    if (_isChapterTitleLine(firstLine)) {
+      lines.shift()
+    }
+  }
+
+  while (lines.length > 0) {
+    const lastIdx = lines.length - 1
+    const lastLine = lines[lastIdx].trim()
+    if (!lastLine) {
+      lines.pop()
+      continue
+    }
+    if (_isChapterTitleLine(lastLine)) {
+      lines.pop()
+      continue
+    }
+    break
+  }
+
+  return lines.join('\n').trim()
+}
+
+LANBrowsing.get('/api/novel/list', async (req, res) => {
+  try {
+    if (!setting.enableNovel || !Novel) {
+      return res.json({ data: [], recordsTotal: 0, recordsFiltered: 0 })
+    }
+    const filter = (req.query.filter || '').toLowerCase()
+    const sortBy = req.query.sortby || 'recentRead'
+    
+    const order = []
+    switch (sortBy) {
+      case 'recentRead': order.push(['lastReadAt', 'DESC'], ['date', 'DESC']); break
+      case 'readCount': order.push(['readCount', 'DESC']); break
+      case 'title': order.push(['title', 'ASC']); break
+      case 'dateAsc': order.push(['date', 'ASC']); break
+      default: order.push(['date', 'DESC'])
+    }
+    
+    let novels = await Novel.findAll({ order, raw: true })
+    if (filter) {
+      novels = novels.filter(n => 
+        (n.title || '').toLowerCase().includes(filter) ||
+        (n.author || '').toLowerCase().includes(filter) ||
+        (n.filename || '').toLowerCase().includes(filter)
+      )
+    }
+    
+    const data = novels.map(n => ({
+      id: n.id,
+      title: n.title,
+      author: n.author,
+      type: n.type,
+      chapterCount: n.chapterCount,
+      filesize: n.filesize,
+      date: n.date,
+      lastReadAt: n.lastReadAt,
+      readCount: n.readCount,
+      hasCover: !!n.coverPath
+    }))
+    
+    res.json({
+      data,
+      recordsTotal: novels.length,
+      recordsFiltered: novels.length
+    })
+  } catch (e) {
+    console.error('[LAN] novel list error:', e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+LANBrowsing.get('/api/novel/:id/cover', async (req, res) => {
+  try {
+    if (!Novel) return res.status(404).send('Novel not found')
+    const novel = await Novel.findByPk(req.params.id)
+    if (!novel || !novel.coverPath) {
+      return res.status(404).send('Cover not found')
+    }
+    res.set('Content-Type', 'image/webp')
+    res.sendFile(novel.coverPath)
+  } catch (e) {
+    res.status(500).send(e.message)
+  }
+})
+
+LANBrowsing.get('/api/novel/:id/chapters', async (req, res) => {
+  try {
+    if (!NovelChapter) return res.json([])
+    const chapters = await NovelChapter.findAll({
+      where: { novelId: req.params.id },
+      order: [['index', 'ASC']],
+      raw: true
+    })
+    res.json(chapters.map(c => ({
+      index: c.index,
+      title: c.title,
+      charCount: c.charCount,
+      startOffset: c.startOffset,
+      endOffset: c.endOffset,
+      byteStartOffset: c.byteStartOffset,
+      byteEndOffset: c.byteEndOffset
+    })))
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+LANBrowsing.get('/api/novel/:id/chapter/:chapterIdx/text', async (req, res) => {
+  try {
+    if (!Novel || !NovelChapter) return res.status(404).send('Not found')
+    const novel = await Novel.findByPk(req.params.id)
+    if (!novel) return res.status(404).send('Novel not found')
+
+    const chapterIdx = parseInt(req.params.chapterIdx, 10)
+    const chapter = await NovelChapter.findOne({
+      where: { novelId: req.params.id, index: chapterIdx },
+      raw: true
+    })
+    if (!chapter) return res.status(404).send('Chapter not found')
+
+    let text = ''
+    if (novel.type === 'epub') {
+      text = await readEpubChapter(novel, chapter)
+    } else {
+      text = await readTxtChapter(novel, chapter)
+    }
+
+    text = stripChapterTextEdges(text, chapter.title)
+
+    res.json({ text })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+LANBrowsing.get('/api/novel/:id/text', async (req, res) => {
+  try {
+    if (!Novel) return res.status(404).send('Novel not found')
+    const novel = await Novel.findByPk(req.params.id)
+    if (!novel) return res.status(404).send('Novel not found')
+    
+    const filepath = novel.filepath
+    if (!filepath || !fs.existsSync(filepath)) {
+      return res.status(404).send('File not found')
+    }
+    
+    const ext = path.extname(filepath).toLowerCase()
+    res.set('Content-Type', 'text/plain; charset=utf-8')
+    
+    if (ext === '.txt' || filepath.endsWith('.epub.txt')) {
+      const content = fs.readFileSync(filepath, 'utf-8')
+      res.send(content)
+    } else {
+      res.status(400).send('Unsupported format')
+    }
+  } catch (e) {
+    res.status(500).send(e.message)
+  }
+})
+
+// Edge TTS 音色列表
+LANBrowsing.get('/api/novel/tts/voices', async (req, res) => {
+  try {
+    res.json(EDGE_TTS_ZH_VOICES)
+  } catch (e) {
+    res.status(500).send(e.message)
+  }
+})
+
+// Edge TTS 合成语音
+LANBrowsing.post('/api/novel/tts/speak', async (req, res) => {
+  try {
+    const { text, voice, rate, pitch } = req.body || {}
+    if (!text || !text.trim()) {
+      return res.status(400).send('Text is required')
+    }
+
+    const mp3Buffer = await synthesizeEdgeTtsMp3({
+      text: text.trim(),
+      voice: voice || 'zh-CN-YunxiNeural',
+      rate: Number.isFinite(rate) ? rate : 1,
+      pitch: Number.isFinite(pitch) ? pitch : 1
+    })
+
+    res.set('Content-Type', 'audio/mpeg')
+    res.set('Content-Disposition', 'inline')
+    res.send(Buffer.from(mp3Buffer))
+  } catch (e) {
+    res.status(500).send(e.message)
+  }
+})
+
 LANBrowsing.get('/', (req, res) => {
   switch (setting.language) {
     case 'en-US':
@@ -2606,26 +3026,51 @@ const enableLANBrowsing = () => {
 
 // ==================== novel ====================
 if (setting.enableNovel) {
-  ipcMain.handle('novel:list', async () => {
-    const list = await Novel.findAll({ order: [['date', 'DESC']] })
-    return list.map(n => {
-      const obj = n.toJSON()
-      obj.readProgress = obj.readProgress || { chapterIdx: 0, charOffset: 0 }
-      return obj
-    })
+  ipcMain.handle('novel:list', async (_e, opts = {}) => {
+    try {
+      const order = []
+      switch (opts.sortBy) {
+        case 'recentRead':
+          order.push(['lastReadAt', 'DESC'], ['date', 'DESC'])
+          break
+        case 'readCount':
+          order.push(['readCount', 'DESC'])
+          break
+        case 'title':
+          order.push(['title', 'ASC'])
+          break
+        case 'dateAsc':
+          order.push(['date', 'ASC'])
+          break
+        default:
+          order.push(['lastReadAt', 'DESC'], ['date', 'DESC'])
+      }
+      const list = await Novel.findAll({ order })
+      return list.map(n => {
+        const obj = n.toJSON()
+        obj.readProgress = obj.readProgress || { chapterIdx: 0, scrollTop: 0 }
+        return obj
+      })
+    } catch (e) {
+      console.error('[novel:list] error:', e)
+      return []
+    }
   })
 
-  ipcMain.handle('novel:scan-library', async (event) => {
+  const scanNovelLibraryInternal = async (event, progressBase = 0) => {
     sendMessageToWebContents('开始扫描小说库')
-    const libraries = Array.isArray(setting.novelLibraries) ? setting.novelLibraries.filter(Boolean) : []
+  const libraries = Array.isArray(setting.novelLibraries) ? setting.novelLibraries.filter(Boolean) : []
     if (!libraries.length) {
       sendMessageToWebContents('未配置小说库目录')
       return { added: 0, total: 0 }
     }
+
+    try { event.sender.send('novel:import-progress', { phase: 'scanning', current: progressBase, total: 100, message: '正在加载已有记录...' }) } catch (e) {}
     const dbNovels = await Novel.findAll({ raw: true })
     const byFilepath = new Map(dbNovels.map(n => [n.filepath, n]))
     for (const n of dbNovels) n.exist = false
 
+    try { event.sender.send('novel:import-progress', { phase: 'scanning', current: progressBase + 5, total: 100, message: '正在扫描文件列表...' }) } catch (e) {}
     let list = await scanNovelFiles(libraries)
     const pattern = (setting.excludeFile || '').trim()
     if (pattern) {
@@ -2633,48 +3078,142 @@ if (setting.enableNovel) {
       list = list.filter(item => !excludeRe.test(item.filepath))
     }
 
-    let added = 0
-    for (const item of list) {
-      const existing = byFilepath.get(item.filepath)
-      if (existing) {
-        existing.exist = true
-        if (existing.status === 'missing') {
-          await Novel.update({ exist: true, status: 'non-tag' }, { where: { id: existing.id } })
-        } else {
-          await Novel.update({ exist: true }, { where: { id: existing.id } })
-        }
-        continue
+    const totalFiles = list.length
+    const progressRange = 95 - progressBase
+
+    const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+    const forceGc = () => {
+      if (typeof gc === 'function') {
+        try { gc() } catch (e) {}
       }
+    }
+
+    let added = 0
+    for (let i = 0; i < list.length; i++) {
       try {
-        const imported = await importNovel(item.filepath)
+        const item = list[i]
+        const progress = progressBase + 10 + Math.round((i / totalFiles) * progressRange)
+        try {
+          event.sender.send('novel:import-progress', { phase: 'scanning', current: progress, total: 100, message: `正在处理: ${path.basename(item.filepath)} (${i + 1}/${totalFiles})` })
+        } catch (e) {
+          console.error(`[scan] send progress failed: ${e.message}`)
+        }
+
+        if (i % 3 === 0 && i > 0) {
+          await delay(30)
+          forceGc()
+        }
+
+        let existing = byFilepath.get(item.filepath)
+        if (!existing && item.type === 'epub') {
+          const txtPath = item.filepath + '.epub.txt'
+          existing = byFilepath.get(txtPath)
+        }
+        if (existing) {
+          existing.exist = true
+          let epubNeedsReimport = false
+          if (item.type === 'epub') {
+            const cachePath = item.filepath + '.epub.txt'
+            const cacheExists = fs.existsSync(cachePath)
+            if (!cacheExists) {
+              sendMessageToWebContents(`检测到 epub 缓存丢失，重新导入: ${existing.title}`)
+              epubNeedsReimport = true
+            } else {
+              const firstChapter = await NovelChapter.findOne({ where: { novelId: existing.id }, order: [['index', 'ASC']], raw: true })
+              if (!firstChapter || firstChapter.charCount < 10) {
+                sendMessageToWebContents(`检测到 epub 章节为空，重新导入: ${existing.title}`)
+                epubNeedsReimport = true
+              }
+            }
+            if (epubNeedsReimport) {
+              try {
+                try { await fs.promises.unlink(cachePath) } catch (e) {}
+                const onProgress = (p) => {
+                  try { event.sender.send('novel:import-progress', { ...p, filepath: item.filepath }) } catch (e) {}
+                }
+                const imported = await importNovel(item.filepath, onProgress, COVER_PATH)
+                await NovelChapter.destroy({ where: { novelId: existing.id } })
+                if (imported.chapters.length > 0) {
+                  await NovelChapter.bulkCreate(imported.chapters.map(c => novelChapterRow(c, existing.id)))
+                }
+                const updateData = { chapterCount: imported.chapters.length, type: 'txt', filepath: imported.filepath }
+                if (imported.coverPath) updateData.coverPath = imported.coverPath
+                await Novel.update(updateData, { where: { id: existing.id } })
+                sendMessageToWebContents(`重新导入完成: ${existing.title} (${imported.chapters.length} 章)`)
+                forceGc()
+              } catch (e) {
+                console.error(`[epub] 扫描重新导入失败: ${existing.title}`, e)
+                sendMessageToWebContents(`重新导入失败: ${existing.title} - ${e.message}`)
+              }
+            }
+          }
+          if (existing.status === 'missing') {
+            await Novel.update({ exist: true, status: 'non-tag' }, { where: { id: existing.id } })
+          } else {
+            await Novel.update({ exist: true }, { where: { id: existing.id } })
+          }
+          continue
+        }
+        const onProgress = (p) => {
+          try { event.sender.send('novel:import-progress', { ...p, filepath: item.filepath }) } catch (e) {}
+        }
+        const imported = await importNovel(item.filepath, onProgress, COVER_PATH)
+        const existingItem = await findExistingNovel(imported.filepath, imported.hash)
+        const novelId = existingItem ? existingItem.id : imported.id
         const novelRow = {
-          id: imported.id, hash: imported.hash, filepath: imported.filepath,
+          id: novelId, hash: imported.hash, filepath: imported.filepath,
           filename: imported.filename, type: imported.type, filesize: imported.filesize,
           encoding: imported.encoding, title: imported.title, author: imported.author,
           status: 'non-tag', chapterCount: imported.chapters.length,
           exist: true, date: Date.now()
         }
-        if (imported.coverBuffer) {
+        if (imported.coverPath) {
+          novelRow.coverPath = imported.coverPath
+        } else if (imported.coverBuffer) {
           const sharp = require('sharp')
-          const coverPath = path.join(COVER_PATH, imported.id + '.webp')
+          const coverPath = path.join(COVER_PATH, novelId + '.webp')
           await sharp(imported.coverBuffer).resize(500, 707, { fit: 'contain', background: '#303133' }).toFile(coverPath)
           novelRow.coverPath = coverPath
         }
         await Novel.upsert(novelRow)
-        await NovelChapter.destroy({ where: { novelId: imported.id } })
-        await NovelChapter.bulkCreate(imported.chapters.map(c => ({
-          id: c.id, novelId: imported.id, index: c.index, title: c.title,
-          startOffset: c.startOffset, endOffset: c.endOffset, charCount: c.charCount
-        })))
+        await NovelChapter.destroy({ where: { novelId } })
+        await NovelChapter.bulkCreate(imported.chapters.map(c => novelChapterRow(c, novelId)))
         added++
+        forceGc()
       } catch (e) {
-        sendMessageToWebContents(`导入失败: ${item.filepath} - ${e.message}`)
+        console.error(`[novel] 处理文件失败: ${item.filepath}`, e)
+        sendMessageToWebContents(`导入失败: ${path.basename(item.filepath)} - ${e.message}`)
       }
     }
-    // 仍 exist=false 的标记为 missing
+
+    forceGc()
+
+    try { event.sender.send('novel:import-progress', { phase: 'scanning', current: 95, total: 100, message: '正在更新数据库状态...' }) } catch (e) {}
     await Novel.update({ status: 'missing' }, { where: { exist: false } })
+
+    try { event.sender.send('novel:import-progress', { phase: 'done', current: 100, total: 100, message: `扫描完成: 新增 ${added} 本，共 ${list.length} 本` }) } catch (e) {}
     sendMessageToWebContents(`扫描完成: 新增 ${added} 本，共 ${list.length} 本`)
     return { added, total: list.length }
+  }
+  ipcMain.handle('novel:scan-library', scanNovelLibraryInternal)
+
+  // 根据文件路径或 hash 查找已有记录，避免重复导入
+  const findExistingNovel = async (filepath, hash) => {
+    let existing = await Novel.findOne({ where: { filepath } })
+    if (!existing && hash) existing = await Novel.findOne({ where: { hash } })
+    return existing
+  }
+
+  const novelChapterRow = (c, novelId) => ({
+    id: c.id,
+    novelId,
+    index: c.index,
+    title: c.title,
+    startOffset: c.startOffset,
+    endOffset: c.endOffset,
+    byteStartOffset: c.byteStartOffset,
+    byteEndOffset: c.byteEndOffset,
+    charCount: c.charCount
   })
 
   ipcMain.handle('novel:import-dialog', async (event) => {
@@ -2685,10 +3224,17 @@ if (setting.enableNovel) {
     })
     if (result.canceled || !result.filePaths.length) return null
     const filepath = result.filePaths[0]
+    // 进度回调：转发给渲染层用于显示加载条
+    const onProgress = (p) => {
+      try { event.sender.send('novel:import-progress', { ...p, filepath }) } catch (e) {}
+    }
     try {
-      const imported = await importNovel(filepath)
+      const imported = await importNovel(filepath, onProgress, COVER_PATH)
+      // 查找已有记录（按 filepath 或 hash），避免重复生成 novel id
+      const existing = await findExistingNovel(imported.filepath, imported.hash)
+      const novelId = existing ? existing.id : imported.id
       const novelRow = {
-        id: imported.id,
+        id: novelId,
         hash: imported.hash,
         filepath: imported.filepath,
         filename: imported.filename,
@@ -2699,30 +3245,27 @@ if (setting.enableNovel) {
         author: imported.author,
         status: 'non-tag',
         chapterCount: imported.chapters.length,
+        exist: true,
         date: Date.now()
       }
-      if (imported.coverBuffer) {
+      if (imported.coverPath) {
+        novelRow.coverPath = imported.coverPath
+      } else if (imported.coverBuffer) {
         const sharp = require('sharp')
-        const coverPath = path.join(COVER_PATH, imported.id + '.webp')
+        const coverPath = path.join(COVER_PATH, novelId + '.webp')
         await sharp(imported.coverBuffer).resize(500, 707, { fit: 'contain', background: '#303133' }).toFile(coverPath)
         novelRow.coverPath = coverPath
       }
       await Novel.upsert(novelRow)
-      await NovelChapter.destroy({ where: { novelId: imported.id } })
-      await NovelChapter.bulkCreate(imported.chapters.map(c => ({
-        id: c.id,
-        novelId: imported.id,
-        index: c.index,
-        title: c.title,
-        startOffset: c.startOffset,
-        endOffset: c.endOffset,
-        charCount: c.charCount
-      })))
+      await NovelChapter.destroy({ where: { novelId } })
+      await NovelChapter.bulkCreate(imported.chapters.map(c => novelChapterRow(c, novelId)))
       sendMessageToWebContents(`Imported novel: ${imported.title} (${imported.chapters.length} chapters)`)
-      return imported.id
+      return novelId
     } catch (e) {
       sendMessageToWebContents(`Import novel failed: ${e.message}`)
       return null
+    } finally {
+      try { event.sender.send('novel:import-progress', { phase: 'done', current: 100, total: 100, message: '完成', filepath }) } catch (e) {}
     }
   })
 
@@ -2730,20 +3273,192 @@ if (setting.enableNovel) {
     return await NovelChapter.findAll({ where: { novelId }, order: [['index', 'ASC']], raw: true })
   })
 
-  ipcMain.handle('novel:read-chapter', async (event, novelId, chapterIdx) => {
-    const novel = await Novel.findByPk(novelId)
-    if (!novel) throw new Error('Novel not found')
-    const chapter = await NovelChapter.findOne({ where: { novelId, index: chapterIdx } })
-    if (!chapter) throw new Error('Chapter not found')
-    if (novel.type === 'txt') {
-      return await readTxtChapter(novel, chapter)
-    } else {
-      return await readEpubChapter(novel, chapterIdx)
+  // 清空所有小说记录（保留设置）
+  ipcMain.handle('novel:clear-all', async () => {
+    await NovelChapter.destroy({ where: {}, truncate: true })
+    await Novel.destroy({ where: {}, truncate: true })
+    sendMessageToWebContents('已清空所有小说记录')
+    return true
+  })
+
+  const sendRebuildProgress = (event, phase, current, total, message) => {
+    try { event.sender.send('novel:import-progress', { phase, current, total, message }) } catch (e) {}
+  }
+
+  // 重建小说数据：仅删除小说相关记录与缓存（保留漫画），然后重新扫描小说目录
+  ipcMain.handle('novel:rebuild-cache', async (event) => {
+    sendMessageToWebContents('开始重建小说数据')
+    const libraries = Array.isArray(setting.novelLibraries) ? setting.novelLibraries.filter(Boolean) : []
+    if (!libraries.length) {
+      sendMessageToWebContents('未配置小说库目录')
+      return { added: 0, total: 0 }
+    }
+
+    try {
+      sendRebuildProgress(event, 'rebuilding', 0, 100, '正在收集缓存文件...')
+
+      // 1. 清空前先收集所有小说记录对应的缓存/封面路径，然后删除磁盘缓存
+      const dbNovels = await Novel.findAll({ attributes: ['filepath', 'coverPath'], raw: true })
+      const deletePromises = []
+      for (const n of dbNovels) {
+        if (n.filepath) {
+          if (n.filepath.endsWith('.epub.txt')) {
+            deletePromises.push(fs.promises.unlink(n.filepath).catch(() => {}))
+          }
+          const derivedTxt = n.filepath.endsWith('.epub') ? n.filepath + '.epub.txt' : n.filepath + '.epub.txt'
+          deletePromises.push(fs.promises.unlink(derivedTxt).catch(() => {}))
+        }
+        if (n.coverPath) {
+          deletePromises.push(fs.promises.unlink(n.coverPath).catch(() => {}))
+        }
+      }
+
+      sendRebuildProgress(event, 'rebuilding', 10, 100, '正在删除缓存文件...')
+      await Promise.all(deletePromises)
+
+      // 2. 再扫描一次文件列表，删除库中所有 epub 对应的缓存（防止有缓存但无 DB 记录的情况）
+      sendRebuildProgress(event, 'rebuilding', 20, 100, '正在扫描文件列表...')
+      let list = await scanNovelFiles(libraries)
+
+      const epubCachePromises = []
+      for (const item of list) {
+        if (item.type === 'epub') {
+          epubCachePromises.push(fs.promises.unlink(item.filepath + '.epub.txt').catch(() => {}))
+        }
+      }
+      await Promise.all(epubCachePromises)
+
+      // 3. 清空小说数据库（仅 Novel 相关表，保留 Manga/Metadata 等漫画表）
+      sendRebuildProgress(event, 'rebuilding', 30, 100, '正在清空数据库...')
+      await NovelBookmark.destroy({ where: {}, truncate: true })
+      await NovelChapter.destroy({ where: {}, truncate: true })
+      await Novel.destroy({ where: {}, truncate: true })
+
+      sendRebuildProgress(event, 'rebuilding', 40, 100, '已清空记录和缓存，开始重新扫描')
+      // 4. 重新扫描（复用 scan-library 逻辑），传递进度基数 40
+      const result = await scanNovelLibraryInternal(event, 40)
+      return result
+    } catch (e) {
+      const mem = process.memoryUsage()
+      console.error(`[${new Date().toISOString()}] [novel] rebuild-cache failed`, e)
+      console.error(`[${new Date().toISOString()}] [novel] Error stack:`, e.stack)
+      console.error(`[${new Date().toISOString()}] [novel] Memory: RSS=${(mem.rss/1024/1024).toFixed(2)}MB, Heap=${(mem.heapUsed/1024/1024).toFixed(2)}MB`)
+      sendMessageToWebContents(`重建失败: ${e.message}`)
+      return { added: 0, total: 0 }
     }
   })
 
+  // epub 旧数据重新导入为 txt 格式
+
+  const reimportEpub = async (novel, event) => {
+    const novelId = novel.id
+    // 如果 novel.filepath 已经是 .epub.txt 缓存路径，还原原始 epub 路径
+    let epubPath = (novel.filepath || '').replace(/\/$/, '')
+    if (epubPath.endsWith('.epub.txt')) {
+      epubPath = epubPath.slice(0, -8) // 去掉 '.epub.txt' 后缀
+    }
+    if (!epubPath || !fs.existsSync(epubPath)) {
+      // 有时盘符/反斜杠导致检测失败，尝试用 path.resolve 标准化
+      const resolved = epubPath ? require('path').resolve(epubPath) : ''
+      if (!resolved || !fs.existsSync(resolved)) {
+        const msg = `原始 epub 文件不存在: ${epubPath}`
+        console.error(`[epub] ${msg}`)
+        throw new Error(msg)
+      }
+      epubPath = resolved
+    }
+    sendMessageToWebContents(`正在转换 epub: ${novel.title}`)
+    try { event.sender.send('novel:import-progress', { phase: 'parsing', current: 0, total: 100, message: '正在转换 epub...', filepath: epubPath }) } catch (e) {}
+    try {
+      // 使用 importNovel（现在会对 epub 做 txt 转换）
+      const imported = await importNovel(epubPath, (p) => {
+        try { event.sender.send('novel:import-progress', { ...p, filepath: epubPath }) } catch (e) {}
+      }, COVER_PATH)
+      // 清除旧章节，写入新章节（txt 格式，含 startOffset/endOffset）
+      await NovelChapter.destroy({ where: { novelId } })
+      if (imported.chapters.length > 0) {
+        await NovelChapter.bulkCreate(imported.chapters.map(c => novelChapterRow(c, novelId)))
+      }
+      const updateData = { chapterCount: imported.chapters.length, type: 'txt', filepath: imported.filepath }
+      if (imported.coverPath) updateData.coverPath = imported.coverPath
+      await Novel.update(updateData, { where: { id: novelId } })
+      try { event.sender.send('novel:epub-reimported', novelId) } catch (e) {}
+      try { event.sender.send('novel:import-progress', { phase: 'done', current: 100, total: 100, message: '完成', filepath: novel.filepath }) } catch (e) {}
+      // 返回章节数据（用于 readTxtChapter）
+      return imported.chapters
+    } catch (e) {
+      console.error(`[epub] 转换失败: ${novel.title}`, e)
+      try { event.sender.send('novel:import-progress', { phase: 'done', current: 100, total: 100, message: '完成', filepath: novel.filepath }) } catch (e) {}
+      throw e
+    }
+  }
+
+  // ColorTxt 风格：一次性读取整本小说全文（返回 UTF-8 ArrayBuffer，避免 IPC 大字符串序列化）
+  ipcMain.handle('novel:read-full-text', async (event, novelId) => {
+    const novel = await Novel.findByPk(novelId)
+    if (!novel) throw new Error('Novel not found')
+    const novelCacheDir = path.join(STORE_PATH, 'novel_cache')
+    const { buffer, encoding } = await readFullText(novel, novelCacheDir)
+    const chapters = await NovelChapter.findAll({ where: { novelId }, order: [['index', 'ASC']], raw: true })
+    // 主进程解码后重新编码为 UTF-8 ArrayBuffer，渲染进程直接用 TextDecoder('utf-8') 解码即可
+    return { buffer: buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength), encoding, chapters }
+  })
+
+  ipcMain.handle('novel:read-chapter', async (event, novelId, chapterIdx) => {
+    let novel = await Novel.findByPk(novelId)
+    if (!novel) throw new Error('Novel not found')
+    if (novel.type === 'txt') {
+      // 如果 filepath 指向 epub 转换的缓存文件
+      if (novel.filepath && novel.filepath.endsWith('.epub.txt')) {
+        const fs = require('fs')
+        let needsReimport = false
+        // 缓存文件不存在，重新导入
+        if (!fs.existsSync(novel.filepath)) {
+          needsReimport = true
+        } else {
+          // 缓存文件存在但内容可能为空（旧版解析失败），检查章节内容
+          const chapter = await NovelChapter.findOne({ where: { novelId, index: chapterIdx } })
+          if (chapter) {
+            const text = await readTxtChapter(novel, chapter)
+            // 如果正文只有章节标题+空白（换行符），说明旧版解析失败，强制重新导入
+            const bodyText = text.replace(/^[^\n]*\n/, '').trim()
+            if (!bodyText && text.trim().length < 50) {
+              try { fs.unlinkSync(novel.filepath) } catch (e) {}
+              needsReimport = true
+            }
+          }
+        }
+        if (needsReimport) {
+          await reimportEpub(novel, event)
+          // 重新查询，获取更新后的 filepath
+          novel = await Novel.findByPk(novelId)
+          if (!novel) throw new Error('Novel not found after reimport')
+        }
+      }
+      const chapter = await NovelChapter.findOne({ where: { novelId, index: chapterIdx } })
+      if (!chapter) throw new Error('Chapter not found')
+      return await readTxtChapter(novel, chapter)
+    }
+    // epub: 旧数据，重新导入为 txt 格式
+    if (novel.type === 'epub') {
+      await reimportEpub(novel, event)
+      novel = await Novel.findByPk(novelId)
+      const chapter = await NovelChapter.findOne({ where: { novelId, index: chapterIdx } })
+      if (!chapter || !novel) return ''
+      return await readTxtChapter(novel, chapter)
+    }
+    return ''
+  })
+
   ipcMain.handle('novel:save-progress', async (event, novelId, progress) => {
-    await Novel.update({ readProgress: progress }, { where: { id: novelId } })
+    await Novel.update({ readProgress: JSON.stringify(progress), lastReadAt: Date.now() }, { where: { id: novelId } })
+  })
+
+  ipcMain.handle('novel:get-progress', async (event, novelId) => {
+    const row = await Novel.findByPk(novelId)
+    if (!row) return { chapterIdx: 0, scrollTop: 0 }
+    const p = typeof row.readProgress === 'string' ? JSON.parse(row.readProgress) : row.readProgress
+    return p || { chapterIdx: 0, scrollTop: 0 }
   })
 
   ipcMain.handle('novel:system-fonts', async () => {
@@ -2777,6 +3492,21 @@ if (setting.enableNovel) {
     const dst = path.join(NOVEL_FONT_PATH, path.basename(src))
     await fs.promises.copyFile(src, dst)
     return dst
+  })
+
+  // Edge TTS 合成（返回 mp3 ArrayBuffer）
+  ipcMain.handle('novel:edge-tts', async (event, req) => {
+    try {
+      const mp3 = await synthesizeEdgeTtsMp3(req)
+      return { ok: true, mp3 }
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) }
+    }
+  })
+
+  // Edge TTS 中文音色列表
+  ipcMain.handle('novel:edge-tts-voices', async () => {
+    return EDGE_TTS_ZH_VOICES
   })
 }
 

@@ -1,9 +1,10 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>exhentai-manga-manager Web Reader</title>
+  <link rel="icon" href="/icon.ico" type="image/x-icon">
   <style>
     * { box-sizing: border-box; }
     html, body {
@@ -117,6 +118,28 @@
       color: #999;
     }
 
+    .type-switch {
+      display: flex;
+      gap: 0;
+      border-radius: 6px;
+      overflow: hidden;
+      border: 1px solid #444;
+    }
+    .type-switch button {
+      padding: 8px 16px;
+      border: none;
+      background: #2a2a2a;
+      color: #999;
+      font-size: 14px;
+      cursor: pointer;
+      border-radius: 0;
+    }
+    .type-switch button:hover { background: #333; }
+    .type-switch button.active {
+      background: #3b82f6;
+      color: white;
+    }
+
     .loading, .empty {
       text-align: center;
       padding: 40px;
@@ -184,11 +207,11 @@
       position: absolute;
       left: 0;
       right: 0;
-      padding: 10px 16px;
+      padding: 6px 12px;
       background: rgba(0,0,0,0.7);
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 8px;
       z-index: 10;
       backdrop-filter: blur(4px);
     }
@@ -201,13 +224,14 @@
     #reader-bottom-bar { bottom: 0; }
 
     .reader-bar button, .reader-bar select {
-      padding: 6px 12px;
+      padding: 4px 10px;
       border-radius: 4px;
       border: none;
       background: #444;
       color: #fff;
       cursor: pointer;
-      font-size: 13px;
+      font-size: 12px;
+      height: 28px;
     }
 
     .reader-bar select {
@@ -219,11 +243,12 @@
 
     .reader-title {
       flex: 1;
-      font-size: 14px;
+      font-size: 13px;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
       margin: 0;
+      font-weight: 500;
     }
 
     .reader-bar input[type="range"] {
@@ -253,12 +278,382 @@
       z-index: 100;
       display: none;
     }
+
+    /* Novel Reader */
+    #novel-reader-view { background: #1e1e1e; position: relative; }
+    #novel-content {
+      --line-height: 1.8;
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 48px 24px 80px 24px;
+      line-height: var(--line-height);
+      font-size: 18px;
+      color: #e0e0e0;
+      max-width: 800px;
+      margin: 0 auto;
+      width: 100%;
+      box-sizing: border-box;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255,255,255,0.06) transparent;
+    }
+    #novel-content::-webkit-scrollbar {
+      width: 2px;
+    }
+    #novel-content::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    #novel-content::-webkit-scrollbar-thumb {
+      background: rgba(255,255,255,0.06);
+      border-radius: 1px;
+    }
+    #novel-content::-webkit-scrollbar-thumb:hover {
+      background: rgba(255,255,255,0.12);
+    }
+    #novel-content .chapter-block {
+      margin-bottom: 40px;
+    }
+    #novel-content .chapter-title {
+      font-size: 1.5em;
+      font-weight: bold;
+      text-align: center;
+      padding: 24px 0 16px 0;
+      color: #d4a853;
+      margin-top: 8px;
+    }
+    #novel-content .chapter-block:first-child .chapter-title { margin-top: 0; }
+    #novel-content p {
+      margin: 0 0 1.2em 0;
+      text-indent: 2em;
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: var(--line-height);
+    }
+    #novel-content p .tts-sentence {
+      display: inline;
+    }
+    #novel-content p.tts-highlight {
+      background: rgba(59, 130, 246, 0.2);
+      border-radius: 4px;
+      padding: 2px 4px;
+      transition: background 0.3s ease;
+    }
+    #novel-content p .tts-sentence.tts-highlight-sentence {
+      background: rgba(59, 130, 246, 0.5);
+      border-radius: 2px;
+      padding: 1px 3px;
+      transition: background 0.3s ease;
+    }
+
+    @media (max-width: 600px) {
+      #novel-content {
+        padding: 12px 16px 80px 16px;
+        font-size: 16px;
+      }
+      #novel-content p {
+        text-indent: 2em;
+        margin-bottom: 1.0em;
+      }
+    }
+    #novel-chapter-list {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 280px;
+      height: 100%;
+      background: #252525;
+      border-right: 1px solid #333;
+      overflow-y: auto;
+      z-index: 20;
+      transform: translateX(-100%);
+      transition: transform 0.25s ease;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255,255,255,0.1) transparent;
+    }
+    #novel-chapter-list::-webkit-scrollbar {
+      width: 4px;
+    }
+    #novel-chapter-list::-webkit-scrollbar-thumb {
+      background: rgba(255,255,255,0.1);
+      border-radius: 2px;
+    }
+    #novel-chapter-list.open { transform: translateX(0); }
+    #novel-chapter-list .chapter-item {
+      padding: 10px 16px;
+      cursor: pointer;
+      border-bottom: 1px solid #2a2a2a;
+      font-size: 14px;
+      color: #ccc;
+    }
+    #novel-chapter-list .chapter-item:hover { background: #2a2a2a; color: #fff; }
+    #novel-chapter-list .chapter-item.active {
+      background: #3b82f6;
+      color: white;
+    }
+    .novel-chapter-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.5);
+      z-index: 15;
+      display: none;
+    }
+    .novel-chapter-overlay.open { display: block; }
+
+    /* Novel Settings Panel */
+    #novel-settings-panel {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 320px;
+      height: 100%;
+      background: #252525;
+      border-right: 1px solid #333;
+      z-index: 25;
+      transform: translateX(-100%);
+      transition: transform 0.3s ease;
+      overflow-y: auto;
+      padding: 16px;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255,255,255,0.1) transparent;
+    }
+    #novel-settings-panel::-webkit-scrollbar {
+      width: 4px;
+    }
+    #novel-settings-panel::-webkit-scrollbar-thumb {
+      background: rgba(255,255,255,0.1);
+      border-radius: 2px;
+    }
+    #novel-settings-panel.open { transform: translateX(0); }
+    #novel-settings-panel h3 {
+      margin: 0 0 16px 0;
+      font-size: 16px;
+      color: #fff;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    #novel-settings-panel .close-btn {
+      background: none;
+      border: none;
+      color: #999;
+      font-size: 20px;
+      cursor: pointer;
+      padding: 0;
+    }
+    .settings-section {
+      margin-bottom: 20px;
+    }
+    .settings-section label {
+      display: block;
+      color: #aaa;
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+    .settings-section .setting-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .settings-section select, .settings-section input[type="range"] {
+      width: 100%;
+    }
+    .settings-section select {
+      padding: 8px;
+      border-radius: 4px;
+      border: 1px solid #444;
+      background: #333;
+      color: #eee;
+      font-size: 14px;
+    }
+    .settings-section input[type="range"] {
+      -webkit-appearance: none;
+      height: 4px;
+      border-radius: 2px;
+      background: #444;
+      outline: none;
+      flex: 1;
+    }
+    .settings-section input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #3b82f6;
+      cursor: pointer;
+    }
+    .slider-with-btns {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .slider-btn {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      border: 1px solid #555;
+      background: #3a3a3a;
+      color: #eee;
+      font-size: 14px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+    .slider-btn:hover { background: #4a4a4a; }
+    .slider-btn:active { background: #3b82f6; }
+    .color-swatches {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .color-swatch {
+      width: 32px;
+      height: 32px;
+      border-radius: 4px;
+      cursor: pointer;
+      border: 2px solid transparent;
+    }
+    .color-swatch.active { border-color: #fff; }
+    .font-samples {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .font-sample {
+      padding: 8px 12px;
+      background: #333;
+      border-radius: 4px;
+      cursor: pointer;
+      color: #eee;
+      font-size: 16px;
+    }
+    .font-sample.active { background: #3b82f6; }
+
+    /* TTS Controls */
+    .tts-fab {
+      position: fixed;
+      right: 20px;
+      bottom: 30px;
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: rgba(30, 30, 30, 0.6);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255,255,255,0.08);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: grab;
+      z-index: 30;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.2);
+      transition: background 0.3s ease, box-shadow 0.3s ease, transform 0.15s ease;
+      user-select: none;
+      touch-action: none;
+    }
+    .tts-fab:hover {
+      background: rgba(30, 30, 30, 0.85);
+      box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+    }
+    .tts-fab:active {
+      cursor: grabbing;
+      transform: scale(0.95);
+    }
+    .tts-fab-icon {
+      font-size: 22px;
+      color: rgba(255,255,255,0.75);
+      transition: color 0.3s ease;
+      pointer-events: none;
+    }
+    .tts-fab.playing {
+      background: transparent;
+      border-color: transparent;
+      box-shadow: none;
+      backdrop-filter: none;
+    }
+    .tts-fab.playing .tts-fab-icon {
+      color: #f59e0b;
+      filter: drop-shadow(0 0 8px rgba(245, 158, 11, 0.6));
+      animation: tts-fab-pulse 1s ease-in-out infinite;
+    }
+    .tts-fab.playing .tts-fab-waves {
+      position: absolute;
+      inset: -4px;
+      border-radius: 50%;
+      border: 2px solid rgba(245, 158, 11, 0.5);
+      animation: tts-fab-wave 1.5s ease-out infinite;
+      pointer-events: none;
+    }
+    .tts-fab.playing .tts-fab-waves::before,
+    .tts-fab.playing .tts-fab-waves::after {
+      content: '';
+      position: absolute;
+      inset: -4px;
+      border-radius: 50%;
+      border: 2px solid rgba(245, 158, 11, 0.4);
+      animation: tts-fab-wave 1.5s ease-out infinite;
+    }
+    .tts-fab.playing .tts-fab-waves::before {
+      animation-delay: 0.5s;
+    }
+    .tts-fab.playing .tts-fab-waves::after {
+      animation-delay: 1s;
+    }
+    .tts-fab.playing:hover {
+      background: rgba(30, 30, 30, 0.6);
+      border-color: rgba(245, 158, 11, 0.2);
+      backdrop-filter: blur(8px);
+    }
+    @keyframes tts-fab-pulse {
+      0%, 100% { transform: scale(1); filter: drop-shadow(0 0 6px rgba(245, 158, 11, 0.5)); }
+      
+      50% { transform: scale(1.15); filter: drop-shadow(0 0 14px rgba(245, 158, 11, 0.8)); }
+    }
+    @keyframes tts-fab-wave {
+      0% {
+        opacity: 0.8;
+        transform: scale(1);
+      }
+      100% {
+        opacity: 0;
+        transform: scale(2);
+      }
+    }
+
+    .settings-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.5);
+      z-index: 24;
+      display: none;
+    }
+    .settings-overlay.open { display: block; }
+
+    .chapter-loading {
+      text-align: center;
+      padding: 30px;
+      color: #888;
+      font-size: 14px;
+    }
+
   </style>
 </head>
 <body>
   <div id="app">
     <div id="library-view" class="view">
       <div class="toolbar">
+        <div class="type-switch" id="type-switch">
+          <button id="btn-manga" class="active">漫画</button>
+          <button id="btn-novel">小说</button>
+        </div>
         <input type="text" id="search-input" placeholder="搜索标题、标签、文件名..." />
         <select id="sort-select">
           <option value="date_added">添加时间</option>
@@ -266,8 +661,14 @@
           <option value="date_posted">发布时间</option>
           <option value="size">大小</option>
           <option value="rating">评分</option>
-          <option value="read_count">阅读次数</option>
+          <option value="read_count" selected>最近阅读</option>
           <option value="random">随机</option>
+        </select>
+        <select id="novel-sort-select" class="hidden">
+          <option value="date">添加时间</option>
+          <option value="recentRead" selected>最近阅读</option>
+          <option value="readCount">阅读次数</option>
+          <option value="title">标题</option>
         </select>
         <button id="search-btn">搜索</button>
         <button id="refresh-btn">刷新</button>
@@ -301,6 +702,102 @@
         <button id="next-btn">下一页</button>
       </div>
     </div>
+
+    <div id="novel-reader-view" class="view hidden">
+      <div id="novel-top-bar" class="reader-bar">
+        <button id="novel-back-btn">返回</button>
+        <button id="novel-chapter-btn">目录</button>
+        <h2 id="novel-title" class="reader-title"></h2>
+        <button id="novel-settings-btn">设置</button>
+      </div>
+      <div id="novel-chapter-list"></div>
+      <div class="novel-chapter-overlay" id="novel-chapter-overlay"></div>
+      <div class="settings-overlay" id="novel-settings-overlay"></div>
+      <div id="novel-settings-panel">
+        <h3>
+          <span>阅读设置</span>
+          <button class="close-btn" id="novel-settings-close">&times;</button>
+        </h3>
+        <div class="settings-section">
+          <label>背景颜色</label>
+          <div class="color-swatches" id="bg-color-swatches">
+            <div class="color-swatch" data-bg="#1e1e1e" data-fg="#e0e0e0" style="background:#1e1e1e"></div>
+            <div class="color-swatch" data-bg="#f5f1e8" data-fg="#333" style="background:#f5f1e8"></div>
+            <div class="color-swatch" data-bg="#2d3a4a" data-fg="#d4e5f7" style="background:#2d3a4a"></div>
+            <div class="color-swatch" data-bg="#1a1a1a" data-fg="#f0e6d3" style="background:#1a1a1a"></div>
+            <div class="color-swatch" data-bg="#3a2d2d" data-fg="#f5e6e6" style="background:#3a2d2d"></div>
+            <div class="color-swatch" data-bg="#2d3a2d" data-fg="#e6f5e6" style="background:#2d3a2d"></div>
+          </div>
+        </div>
+        <div class="settings-section">
+          <label>字体</label>
+          <div class="font-samples" id="font-samples">
+            <div class="font-sample" data-font="sans-serif" style="font-family:sans-serif">默认字体</div>
+            <div class="font-sample" data-font="'宋体', SimSun, serif" style="font-family:'宋体',SimSun,serif">宋体</div>
+            <div class="font-sample" data-font="'黑体', SimHei, sans-serif" style="font-family:'黑体',SimHei,sans-serif">黑体</div>
+            <div class="font-sample" data-font="'楷体', KaiTi, serif" style="font-family:'楷体',KaiTi,serif">楷体</div>
+            <div class="font-sample" data-font="'微软雅黑', 'Microsoft YaHei', sans-serif" style="font-family:'微软雅黑','Microsoft YaHei',sans-serif">微软雅黑</div>
+          </div>
+        </div>
+        <div class="settings-section">
+          <label>字号 <span id="font-size-value">18px</span></label>
+          <div class="slider-with-btns">
+            <button class="slider-btn" data-action="font-size-dec">&#8722;</button>
+            <input type="range" id="font-size-slider" min="14" max="28" step="1" value="18" />
+            <button class="slider-btn" data-action="font-size-inc">+</button>
+          </div>
+        </div>
+        <div class="settings-section">
+          <label>行高 <span id="line-height-value">1.6</span></label>
+          <div class="slider-with-btns">
+            <button class="slider-btn" data-action="line-height-dec">&#8722;</button>
+            <input type="range" id="line-height-slider" min="1.2" max="2.5" step="0.1" value="1.6" />
+            <button class="slider-btn" data-action="line-height-inc">+</button>
+          </div>
+        </div>
+        <div class="settings-section">
+          <label>TTS 引擎</label>
+          <select id="tts-engine">
+            <option value="system">系统语音</option>
+            <option value="edge">Edge TTS</option>
+          </select>
+        </div>
+        <div class="settings-section">
+          <label>朗读模式</label>
+          <select id="tts-mode">
+            <option value="single">单音色</option>
+            <option value="dialogue">旁白/对白</option>
+          </select>
+        </div>
+        <div class="settings-section" id="tts-voice-section">
+          <label>朗读音色</label>
+          <select id="tts-voice"></select>
+        </div>
+        <div class="settings-section" id="tts-narrator-section" style="display:none;">
+          <label>旁白音色</label>
+          <select id="tts-narrator-voice"></select>
+        </div>
+        <div class="settings-section" id="tts-dialogue-section" style="display:none;">
+          <label>对白音色</label>
+          <select id="tts-dialogue-voice"></select>
+        </div>
+        <div class="settings-section">
+          <label>语速 <span id="tts-rate-value">1.0x</span></label>
+          <div class="slider-with-btns">
+            <button class="slider-btn" data-action="tts-rate-dec">&#8722;</button>
+            <input type="range" id="tts-rate-slider" min="0.5" max="2" step="0.1" value="1" />
+            <button class="slider-btn" data-action="tts-rate-inc">+</button>
+          </div>
+        </div>
+      </div>
+      <div id="novel-content">
+        <div id="novel-chapters-container"></div>
+      </div>
+      <div id="novel-tts-fab" class="tts-fab" title="播放/暂停朗读">
+        <span class="tts-fab-icon">&#127911;</span>
+        <span class="tts-fab-waves"></span>
+      </div>
+    </div>
   </div>
 
   <div id="error-toast" class="error-toast"></div>
@@ -314,6 +811,111 @@
     let readerMode = 'waterfall'
     let preloadedImages = new Map()
     let waterfallObserver = null
+    let currentType = localStorage.getItem('web_reader_type') || 'manga'
+    let currentNovel = null
+    let novelChapters = []
+    let loadedChapters = new Map()
+    let renderedChapterRange = { start: -1, end: -1 }
+    let currentChapterIdx = 0
+    let PRELOAD_BEFORE = 1
+    let PRELOAD_AFTER = 2
+    let isLoadingChapter = false
+    
+    const savedSettings = localStorage.getItem('web_novel_settings')
+    let novelSettings = savedSettings ? JSON.parse(savedSettings) : {
+      bgColor: '#1e1e1e',
+      fgColor: '#e0e0e0',
+      fontFamily: 'sans-serif',
+      fontSize: 18,
+      lineHeight: 1.8
+    }
+
+    function saveNovelSettings() {
+      localStorage.setItem('web_novel_settings', JSON.stringify(novelSettings))
+    }
+
+    function syncSettingsUI() {
+      $('font-size-slider').value = novelSettings.fontSize
+      $('font-size-value').textContent = novelSettings.fontSize + 'px'
+      $('line-height-slider').value = novelSettings.lineHeight
+      $('line-height-value').textContent = novelSettings.lineHeight.toFixed(1)
+      $('tts-engine').value = ttsEngine
+      $('tts-mode').value = ttsMode
+      $('tts-rate-slider').value = ttsRate
+      $('tts-rate-value').textContent = ttsRate.toFixed(1) + 'x'
+
+      const isDialogue = ttsMode === 'dialogue'
+      $('tts-voice-section').style.display = isDialogue ? 'none' : 'block'
+      $('tts-narrator-section').style.display = isDialogue ? 'block' : 'none'
+      $('tts-dialogue-section').style.display = isDialogue ? 'block' : 'none'
+
+      document.querySelectorAll('#bg-color-swatches .color-swatch').forEach(s => {
+        s.classList.toggle('active', s.dataset.bg === novelSettings.bgColor)
+      })
+      document.querySelectorAll('#font-samples .font-sample').forEach(s => {
+        s.classList.toggle('active', s.dataset.font === novelSettings.fontFamily)
+      })
+    }
+
+    let ttsEngine = localStorage.getItem('web_tts_engine') || 'edge'
+    let ttsMode = localStorage.getItem('web_tts_mode') || 'single'
+    let ttsVoice = localStorage.getItem('web_tts_voice') || ''
+    let ttsNarratorVoice = localStorage.getItem('web_tts_narrator_voice') || ''
+    let ttsDialogueVoice = localStorage.getItem('web_tts_dialogue_voice') || ''
+    let ttsRate = parseFloat(localStorage.getItem('web_tts_rate')) || 1
+
+    function saveTTSSettings() {
+      localStorage.setItem('web_tts_engine', ttsEngine)
+      localStorage.setItem('web_tts_mode', ttsMode)
+      localStorage.setItem('web_tts_voice', ttsVoice)
+      localStorage.setItem('web_tts_narrator_voice', ttsNarratorVoice)
+      localStorage.setItem('web_tts_dialogue_voice', ttsDialogueVoice)
+      localStorage.setItem('web_tts_rate', ttsRate.toString())
+    }
+    let ttsVoices = []
+    let ttsPlaying = false
+    let ttsPaused = false
+    let ttsUtterance = null
+    let ttsAudio = null
+    let ttsSegments = []
+    let ttsCurrentSegIdx = 0
+    let ttsCurrentParagraphEl = null
+    const ttsAudioCache = new Map()
+    const ttsPreloadControllers = new Set()
+    const TTS_PRELOAD_COUNT = 3
+
+    let savePositionTimer = null
+    const SAVE_POSITION_DELAY = 500
+
+    async function saveReadingPosition(type, itemId, position) {
+      try {
+        await fetch(`/api/progress/${type}/${encodeURIComponent(itemId)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ progress: position })
+        })
+      } catch (e) {
+        console.warn('保存阅读位置失败:', e)
+      }
+    }
+
+    function scheduleSaveReadingPosition(type, itemId, position) {
+      if (savePositionTimer) clearTimeout(savePositionTimer)
+      savePositionTimer = setTimeout(() => {
+        saveReadingPosition(type, itemId, position)
+      }, SAVE_POSITION_DELAY)
+    }
+
+    async function getReadingPosition(type, itemId) {
+      try {
+        const response = await fetch(`/api/progress/${type}/${encodeURIComponent(itemId)}`)
+        const data = await response.json()
+        return data ? data.progress : null
+      } catch (e) {
+        console.warn('读取阅读位置失败:', e)
+      }
+      return null
+    }
 
     function showError(msg) {
       const toast = $('error-toast')
@@ -357,7 +959,7 @@
           card.innerHTML = `
             <img class="book-cover" src="/api/archives/${encodeURIComponent(book.arcid)}/thumbnail" loading="lazy" alt="cover" />
             <div class="book-info">
-              <div class="book-title">${escapeHtml(book.title)}</div>
+              <div class="book-title">${escapeHtml(extractBookTitle(book.title))}</div>
               <div class="book-meta">${book.pagecount || '?'} 页 · ${formatSize(book.size)}</div>
             </div>
           `
@@ -370,23 +972,1553 @@
       }
     }
 
+    async function loadNovelLibrary() {
+      const listEl = $('book-list')
+      const statusEl = $('library-status')
+      const filter = $('search-input').value.trim()
+      const sortby = $('novel-sort-select').value
+
+      listEl.innerHTML = ''
+      statusEl.textContent = '正在加载...'
+      statusEl.style.display = 'block'
+
+      try {
+        const query = new URLSearchParams({ sortby })
+        if (filter) query.set('filter', filter)
+        query.set('_t', Date.now().toString())
+        const data = await fetchJSON(`/api/novel/list?${query.toString()}`)
+        const novels = data.data || []
+
+        if (novels.length === 0) {
+          statusEl.textContent = filter ? '没有搜索到结果' : '小说库为空'
+          return
+        }
+
+        statusEl.style.display = 'none'
+        for (const novel of novels) {
+          const card = document.createElement('div')
+          card.className = 'book-card'
+          const coverSrc = novel.hasCover
+            ? `/api/novel/${encodeURIComponent(novel.id)}/cover`
+            : ''
+          card.innerHTML = `
+            <div class="book-cover" style="display:flex;align-items:center;justify-content:center;background:#1e3a5f;color:#fff;font-size:2em;font-weight:bold;">
+              ${coverSrc ? `<img src="${coverSrc}" loading="lazy" alt="cover" style="width:100%;height:100%;object-fit:cover;" />` : (extractBookTitle(novel.title) || '?').charAt(0)}
+            </div>
+            <div class="book-info">
+              <div class="book-title">${escapeHtml(extractBookTitle(novel.title))}</div>
+              <div class="book-meta">${novel.author || '未知'} · ${novel.chapterCount || 0} 章</div>
+            </div>
+          `
+          card.addEventListener('click', () => openNovel(novel))
+          listEl.appendChild(card)
+        }
+      } catch (err) {
+        statusEl.textContent = '加载失败: ' + err.message
+        showError('加载小说库失败: ' + err.message)
+      }
+    }
+
+    function switchType(type) {
+      currentType = type
+      localStorage.setItem('web_reader_type', type)
+      $('btn-manga').classList.toggle('active', type === 'manga')
+      $('btn-novel').classList.toggle('active', type === 'novel')
+      $('sort-select').classList.toggle('hidden', type !== 'manga')
+      $('novel-sort-select').classList.toggle('hidden', type !== 'novel')
+      if (type === 'manga') {
+        loadLibrary()
+      } else {
+        loadNovelLibrary()
+      }
+    }
+
+    const loadingChapters = new Map()
+
+    async function loadChapterData(idx) {
+      if (loadedChapters.has(idx)) return loadedChapters.get(idx)
+      if (idx < 0 || idx >= novelChapters.length) return null
+
+      if (loadingChapters.has(idx)) {
+        return loadingChapters.get(idx)
+      }
+
+      const promise = (async () => {
+        try {
+          const chapter = novelChapters[idx]
+          const resp = await fetch(`/api/novel/${encodeURIComponent(currentNovel.id)}/chapter/${idx}/text`).then(r => r.json())
+          const chapterText = resp.text || ''
+          const paragraphs = parseParagraphs(chapterText)
+          const html = buildChapterHtml(chapter.title, paragraphs)
+          const data = { title: chapter.title, text: chapterText, paragraphs, html, idx }
+          loadedChapters.set(idx, data)
+          return data
+        } catch (e) {
+          console.error('加载章节失败:', idx, e)
+          return null
+        } finally {
+          loadingChapters.delete(idx)
+        }
+      })()
+
+      loadingChapters.set(idx, promise)
+      return promise
+    }
+
+    async function loadChaptersParallel(indices) {
+      const promises = indices.map(idx => {
+        if (loadedChapters.has(idx)) return Promise.resolve(loadedChapters.get(idx))
+        if (idx < 0 || idx >= novelChapters.length) return Promise.resolve(null)
+        return loadChapterData(idx)
+      })
+      return Promise.all(promises)
+    }
+
+    function parseParagraphs(chapterText) {
+      const lines = chapterText.split('\n')
+      const paragraphs = []
+      let currentPara = ''
+      const INDENT_RE = /^(\s{2,4}|\u3000{1,2})/
+
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed) {
+          if (currentPara.trim()) {
+            paragraphs.push(currentPara.trim())
+            currentPara = ''
+          }
+        } else if (INDENT_RE.test(line)) {
+          if (currentPara.trim()) {
+            paragraphs.push(currentPara.trim())
+          }
+          currentPara = line.trim()
+        } else {
+          if (currentPara && !INDENT_RE.test(currentPara)) {
+            currentPara += '\n' + line
+          } else {
+            currentPara += line
+          }
+        }
+      }
+      if (currentPara.trim()) {
+        paragraphs.push(currentPara.trim())
+      }
+      return paragraphs
+    }
+
+    function hasMeaningfulText(text) {
+      const trimmed = text.trim()
+      if (!trimmed) return false
+      return /[\u4e00-\u9fa5a-zA-Z0-9]/.test(trimmed)
+    }
+
+    function buildChapterHtml(title, paragraphs) {
+      let html = `<div class="chapter-title">${escapeHtml(title)}</div>`
+      for (let paraIdx = 0; paraIdx < paragraphs.length; paraIdx++) {
+        const p = paragraphs[paraIdx]
+        if (!p || !hasMeaningfulText(p)) continue
+        const pieces = splitSentencesPreserveNewlines(p)
+        let pHtml = ''
+        for (let i = 0; i < pieces.length; i++) {
+          const piece = pieces[i]
+          if (piece.isSentence) {
+            pHtml += `<span class="tts-sentence" data-sentence-idx="${piece.sentenceIdx}">${escapeHtml(piece.text)}</span>`
+          } else {
+            pHtml += escapeHtml(piece.text)
+          }
+        }
+        html += `<p data-para-idx="${paraIdx}">${pHtml}</p>`
+      }
+      return html
+    }
+
+    function splitSentencesPreserveNewlines(text) {
+      const result = []
+      let sentenceIdx = 0
+      let buffer = ''
+      let i = 0
+
+      while (i < text.length) {
+        const ch = text[i]
+        if (ch === '\n') {
+          if (buffer) {
+            result.push({ isSentence: true, sentenceIdx, text: buffer })
+            buffer = ''
+            sentenceIdx++
+          }
+          result.push({ isSentence: false, text: '\n' })
+          i++
+        } else if ('。！？!?…'.indexOf(ch) !== -1) {
+          buffer += ch
+          while (i + 1 < text.length && '。！？!?…'.indexOf(text[i + 1]) !== -1) {
+            i++
+            buffer += text[i]
+          }
+          result.push({ isSentence: true, sentenceIdx, text: buffer })
+          buffer = ''
+          sentenceIdx++
+          i++
+        } else {
+          buffer += ch
+          i++
+        }
+      }
+
+      if (buffer) {
+        result.push({ isSentence: true, sentenceIdx, text: buffer })
+      }
+
+      return result
+    }
+
+    async function openNovel(novel) {
+      try {
+        currentNovel = novel
+        currentChapterIdx = 0
+        loadedChapters.clear()
+        renderedChapterRange = { start: -1, end: -1 }
+        isLoadingChapter = false
+        $('novel-title').textContent = extractBookTitle(novel.title)
+        $('library-view').classList.add('hidden')
+        $('novel-reader-view').classList.remove('hidden')
+        $('novel-chapters-container').innerHTML =
+          '<div class="chapter-loading">正在加载...</div>'
+        applyNovelSettings()
+        syncSettingsUI()
+
+        const chapters = await fetchJSON(`/api/novel/${encodeURIComponent(novel.id)}/chapters`)
+        novelChapters = chapters || []
+
+        renderChapterList()
+
+        const savedPos = await getReadingPosition('novel', novel.id)
+        let startChapter = 0
+        if (savedPos && savedPos.chapterIdx >= 0 && savedPos.chapterIdx < novelChapters.length) {
+          startChapter = savedPos.chapterIdx
+        }
+
+        const initEnd = Math.min(startChapter + 2, novelChapters.length - 1)
+        const initStart = Math.max(0, startChapter - 1)
+        const container = $('novel-chapters-container')
+        container.innerHTML = ''
+
+        const initIndices = []
+        for (let i = initStart; i <= initEnd; i++) initIndices.push(i)
+        
+        const results = await loadChaptersParallel(initIndices)
+        for (let i = 0; i < results.length; i++) {
+          const data = results[i]
+          if (data) {
+            const block = document.createElement('div')
+            block.className = 'chapter-block'
+            block.dataset.chapterIdx = data.idx
+            block.innerHTML = data.html
+            container.appendChild(block)
+          }
+        }
+        renderedChapterRange = { start: initStart, end: initEnd }
+
+        $('novel-content').scrollTop = 0
+
+        if (savedPos && savedPos.chapterIdx >= initStart && savedPos.chapterIdx <= initEnd) {
+          requestAnimationFrame(() => {
+            const targetBlock = container.querySelector(`.chapter-block[data-chapter-idx="${savedPos.chapterIdx}"]`)
+            if (targetBlock) {
+              const targetPara = targetBlock.querySelector(`p[data-para-idx="${savedPos.paraIdx || 0}"]`)
+              if (targetPara) {
+                const contentEl = $('novel-content')
+                const topBar = $('novel-top-bar')
+                const topBarHeight = topBar ? topBar.offsetHeight : 60
+                const contentRect = contentEl.getBoundingClientRect()
+                const paraRect = targetPara.getBoundingClientRect()
+                const topRelative = paraRect.top - contentRect.top + contentEl.scrollTop
+                contentEl.scrollTop = Math.max(0, topRelative - topBarHeight - 20)
+              }
+            }
+          })
+        }
+
+        loadTTSVoices()
+        setupNovelScroll()
+      } catch (err) {
+        showError('打开小说失败: ' + err.message)
+      }
+    }
+
+    function renderChaptersRange(start, end) {
+      const container = $('novel-chapters-container')
+      const frag = document.createDocumentFragment()
+
+      for (let i = start; i <= end; i++) {
+        const data = loadedChapters.get(i)
+        if (!data) continue
+
+        const block = document.createElement('div')
+        block.className = 'chapter-block'
+        block.dataset.chapterIdx = i
+        block.innerHTML = data.html
+        frag.appendChild(block)
+      }
+
+      container.appendChild(frag)
+    }
+
+    function prependChaptersRange(start, end) {
+      const container = $('novel-chapters-container')
+      const frag = document.createDocumentFragment()
+
+      for (let i = end; i >= start; i--) {
+        const data = loadedChapters.get(i)
+        if (!data) continue
+
+        const block = document.createElement('div')
+        block.className = 'chapter-block'
+        block.dataset.chapterIdx = i
+        block.innerHTML = data.html
+        frag.insertBefore(block, frag.firstChild)
+      }
+
+      container.insertBefore(frag, container.firstChild)
+    }
+
+    let novelScrollBound = false
+    function setupNovelScroll() {
+      if (novelScrollBound) return
+      novelScrollBound = true
+      const contentEl = $('novel-content')
+      let ticking = false
+
+      contentEl.addEventListener('scroll', () => {
+        if (!ticking) {
+          requestAnimationFrame(() => {
+            handleNovelScroll()
+            ticking = false
+          })
+          ticking = true
+        }
+      }, { passive: true })
+
+      contentEl.addEventListener('click', (e) => {
+        if (e.target.closest('#novel-chapters-container')) {
+          playFromClickPosition(e)
+        }
+      })
+    }
+
+    function playFromClickPosition(e) {
+      if (!currentNovel) return
+
+      let targetChapter = -1
+      let targetParaIdx = -1
+      let targetEl = e.target.closest('#novel-content p')
+      if (!targetEl) return
+
+      const blockEl = targetEl.closest('.chapter-block')
+      if (!blockEl) return
+
+      targetChapter = parseInt(blockEl.dataset.chapterIdx, 10)
+      const allParas = blockEl.querySelectorAll('p')
+      targetParaIdx = Array.from(allParas).indexOf(targetEl)
+      if (targetParaIdx === -1) return
+
+      let globalSegIdx = 0
+      for (let ci = renderedChapterRange.start; ci < targetChapter; ci++) {
+        const cd = loadedChapters.get(ci)
+        if (cd) {
+          globalSegIdx += buildTTSSegments(cd.paragraphs).length
+        }
+      }
+
+      const chapterData = loadedChapters.get(targetChapter)
+      if (chapterData) {
+        for (let pIdx = 0; pIdx < targetParaIdx; pIdx++) {
+          const segs = buildTTSSegments([chapterData.paragraphs[pIdx]])
+          globalSegIdx += segs.length
+        }
+      }
+
+      ttsSegments = buildAllSegmentsForRange()
+      ttsCurrentSegIdx = Math.min(globalSegIdx, ttsSegments.length - 1)
+      if (ttsCurrentSegIdx < 0) ttsCurrentSegIdx = 0
+      ttsPlaying = true
+      ttsPaused = false
+      $('novel-tts-fab').classList.add('playing')
+      startPlayback()
+    }
+
+    async function handleNovelScroll() {
+      const contentEl = $('novel-content')
+      const scrollTop = contentEl.scrollTop
+      const scrollHeight = contentEl.scrollHeight
+      const clientHeight = contentEl.clientHeight
+      const distanceFromBottom = scrollHeight - scrollTop - clientHeight
+      const distanceFromTop = scrollTop
+
+      updateCurrentChapter()
+      
+      const topBar = $('novel-top-bar')
+      const topBarBottom = topBar ? topBar.getBoundingClientRect().bottom : 0
+      const blocks = contentEl.querySelectorAll('.chapter-block')
+      let chapterIdx = -1
+      let paraIdx = -1
+
+      for (const block of blocks) {
+        const ci = parseInt(block.dataset.chapterIdx, 10)
+        const paras = block.querySelectorAll('p')
+        for (let pIdx = 0; pIdx < paras.length; pIdx++) {
+          const p = paras[pIdx]
+          const pRect = p.getBoundingClientRect()
+          if (pRect.bottom > topBarBottom) {
+            chapterIdx = ci
+            paraIdx = parseInt(p.dataset.paraIdx, 10)
+            if (isNaN(paraIdx)) paraIdx = pIdx
+            break
+          }
+        }
+        if (chapterIdx !== -1) break
+      }
+
+      if (chapterIdx !== -1 && currentNovel) {
+        scheduleSaveReadingPosition('novel', currentNovel.id, {
+          chapterIdx,
+          paraIdx,
+          scrollTop: contentEl.scrollTop
+        })
+      }
+
+      if (distanceFromBottom < 400 && !isLoadingChapter) {
+        const nextIdx = renderedChapterRange.end + 1
+        if (nextIdx < novelChapters.length) {
+          await loadMoreChaptersForward()
+        }
+      }
+
+      if (distanceFromTop < 200 && !isLoadingChapter) {
+        const prevIdx = renderedChapterRange.start - 1
+        if (prevIdx >= 0) {
+          await loadMoreChaptersBackward()
+        }
+      }
+    }
+
+    async function loadMoreChaptersForward() {
+      if (isLoadingChapter) return
+      isLoadingChapter = true
+
+      try {
+        const nextIdx = renderedChapterRange.end + 1
+        if (nextIdx >= novelChapters.length) return
+
+        const loadEnd = Math.min(nextIdx + PRELOAD_AFTER, novelChapters.length - 1)
+
+        for (let i = nextIdx; i <= loadEnd; i++) {
+          await loadChapterData(i)
+        }
+
+        renderChaptersRange(nextIdx, loadEnd)
+        renderedChapterRange.end = loadEnd
+      } catch (e) {
+        console.error('加载更多章节失败:', e)
+      } finally {
+        isLoadingChapter = false
+      }
+    }
+
+    async function loadMoreChaptersBackward() {
+      if (isLoadingChapter) return
+      isLoadingChapter = true
+
+      try {
+        const prevIdx = renderedChapterRange.start - 1
+        if (prevIdx < 0) return
+
+        const loadStart = Math.max(prevIdx - PRELOAD_BEFORE, 0)
+        const contentEl = $('novel-content')
+        const prevScrollHeight = contentEl.scrollHeight
+
+        for (let i = prevIdx; i >= loadStart; i--) {
+          await loadChapterData(i)
+        }
+
+        prependChaptersRange(loadStart, prevIdx)
+
+        const newScrollHeight = contentEl.scrollHeight
+        const heightDiff = newScrollHeight - prevScrollHeight
+        contentEl.scrollTop += heightDiff
+
+        renderedChapterRange.start = loadStart
+      } catch (e) {
+        console.error('加载前面章节失败:', e)
+      } finally {
+        isLoadingChapter = false
+      }
+    }
+
+    function updateCurrentChapter() {
+      const contentEl = $('novel-content')
+      const blocks = contentEl.querySelectorAll('.chapter-block')
+      const viewportTop = contentEl.scrollTop + 60
+
+      let currentIdx = currentChapterIdx
+      for (const block of blocks) {
+        const idx = parseInt(block.dataset.chapterIdx, 10)
+        const top = block.offsetTop
+        if (top <= viewportTop) {
+          currentIdx = idx
+        } else {
+          break
+        }
+      }
+
+      if (currentIdx !== currentChapterIdx) {
+        currentChapterIdx = currentIdx
+        updateChapterListHighlight()
+      }
+    }
+
+    async function closeNovelReader() {
+      if (currentNovel) {
+        const contentEl = $('novel-content')
+        const topBar = $('novel-top-bar')
+        const topBarBottom = topBar ? topBar.getBoundingClientRect().bottom : 0
+        const blocks = contentEl.querySelectorAll('.chapter-block')
+        let chapterIdx = -1
+        let paraIdx = -1
+
+        for (const block of blocks) {
+          const ci = parseInt(block.dataset.chapterIdx, 10)
+          const paras = block.querySelectorAll('p')
+          for (let pIdx = 0; pIdx < paras.length; pIdx++) {
+            const p = paras[pIdx]
+            const pRect = p.getBoundingClientRect()
+            if (pRect.bottom > topBarBottom) {
+              chapterIdx = ci
+              paraIdx = parseInt(p.dataset.paraIdx, 10)
+              if (isNaN(paraIdx)) paraIdx = pIdx
+              break
+            }
+          }
+          if (chapterIdx !== -1) break
+        }
+
+        if (chapterIdx !== -1) {
+          await saveReadingPosition('novel', currentNovel.id, {
+            chapterIdx,
+            paraIdx,
+            scrollTop: contentEl.scrollTop
+          })
+        }
+      }
+      if (savePositionTimer) {
+        clearTimeout(savePositionTimer)
+        savePositionTimer = null
+      }
+      stopTTS()
+      $('novel-reader-view').classList.add('hidden')
+      $('library-view').classList.remove('hidden')
+      $('novel-settings-panel').classList.remove('open')
+      $('novel-settings-overlay').classList.remove('open')
+      currentNovel = null
+      novelChapters = []
+      loadedChapters.clear()
+      fullNovelText = null
+      currentChapterIdx = 0
+      renderedChapterRange = { start: -1, end: -1 }
+      $('novel-chapter-list').classList.remove('open')
+      $('novel-chapter-overlay').classList.remove('open')
+    }
+
+    function renderChapterList() {
+      const listEl = $('novel-chapter-list')
+      listEl.innerHTML = ''
+      novelChapters.forEach((ch, idx) => {
+        const item = document.createElement('div')
+        item.className = 'chapter-item' + (idx === currentChapterIdx ? ' active' : '')
+        item.textContent = ch.title
+        item.addEventListener('click', () => {
+          jumpToChapter(idx)
+          $('novel-chapter-list').classList.remove('open')
+          $('novel-chapter-overlay').classList.remove('open')
+        })
+        listEl.appendChild(item)
+      })
+    }
+
+    function updateChapterListHighlight() {
+      const items = document.querySelectorAll('#novel-chapter-list .chapter-item')
+      items.forEach((el, i) => {
+        el.classList.toggle('active', i === currentChapterIdx)
+      })
+    }
+
+    async function jumpToChapter(idx) {
+      idx = Math.max(0, Math.min(novelChapters.length - 1, idx))
+
+      const contentEl = $('novel-content')
+      const container = $('novel-chapters-container')
+
+      const existingBlock = container.querySelector(`.chapter-block[data-chapter-idx="${idx}"]`)
+      if (existingBlock) {
+        contentEl.scrollTo({
+          top: existingBlock.offsetTop - 10,
+          behavior: 'smooth'
+        })
+        currentChapterIdx = idx
+        updateChapterListHighlight()
+        return
+      }
+
+      stopTTS()
+      container.innerHTML = ''
+      loadedChapters.clear()
+      renderedChapterRange = { start: -1, end: -1 }
+
+      const startIdx = Math.max(0, idx - PRELOAD_BEFORE)
+      const endIdx = Math.min(idx + PRELOAD_AFTER, novelChapters.length - 1)
+
+      for (let i = startIdx; i <= endIdx; i++) {
+        await loadChapterData(i)
+      }
+
+      renderChaptersRange(startIdx, endIdx)
+      renderedChapterRange = { start: startIdx, end: endIdx }
+
+      currentChapterIdx = idx
+      updateChapterListHighlight()
+
+      requestAnimationFrame(() => {
+        const targetBlock = container.querySelector(`.chapter-block[data-chapter-idx="${idx}"]`)
+        if (targetBlock) {
+          contentEl.scrollTop = targetBlock.offsetTop - 10
+        }
+      })
+    }
+
+    function applyNovelSettings() {
+      const contentEl = $('novel-content')
+      contentEl.style.background = novelSettings.bgColor
+      contentEl.style.color = novelSettings.fgColor
+      contentEl.style.fontFamily = novelSettings.fontFamily
+      contentEl.style.fontSize = novelSettings.fontSize + 'px'
+      contentEl.style.setProperty('--line-height', novelSettings.lineHeight)
+      $('novel-reader-view').style.background = novelSettings.bgColor
+    }
+
+    async function loadTTSVoices() {
+      const populateSelect = (selectEl, voices, selectedId) => {
+        selectEl.innerHTML = ''
+        voices.forEach(v => {
+          const opt = document.createElement('option')
+          opt.value = v.id || v.voiceURI
+          opt.textContent = v.label || v.name || v.voiceName || v.id
+          selectEl.appendChild(opt)
+        })
+        if (voices.length > 0) {
+          selectEl.value = selectedId || voices[0].id || voices[0].voiceURI
+        }
+      }
+
+      if (ttsEngine === 'edge') {
+        try {
+          const voices = await fetchJSON('/api/novel/tts/voices')
+          ttsVoices = voices || []
+        } catch (e) {
+          console.warn('Failed to load edge tts voices:', e)
+          ttsVoices = [
+            { id: 'zh-CN-YunxiNeural', label: '云希 (男声)' },
+            { id: 'zh-CN-XiaoxiaoNeural', label: '晓晓 (女声)' },
+            { id: 'zh-CN-YunjianNeural', label: '云健 (男声)' }
+          ]
+        }
+        populateSelect($('tts-voice'), ttsVoices, ttsVoice)
+        populateSelect($('tts-narrator-voice'), ttsVoices, ttsNarratorVoice)
+        populateSelect($('tts-dialogue-voice'), ttsVoices, ttsDialogueVoice)
+
+        if (ttsVoices.length > 0) {
+          if (!ttsVoice) ttsVoice = ttsVoices[0].id
+          if (!ttsNarratorVoice) ttsNarratorVoice = ttsVoices[0].id
+          if (ttsVoices.length > 1) {
+            ttsDialogueVoice = ttsDialogueVoice || ttsVoices[1].id
+          }
+        }
+      } else if (ttsEngine === 'system' && 'speechSynthesis' in window) {
+        const voices = speechSynthesis.getVoices()
+        ttsVoices = voices.filter(v => v.lang && v.lang.startsWith('zh'))
+        if (ttsVoices.length === 0) ttsVoices = voices.slice(0, 5)
+
+        populateSelect($('tts-voice'), ttsVoices, ttsVoice)
+        populateSelect($('tts-narrator-voice'), ttsVoices, ttsNarratorVoice)
+        populateSelect($('tts-dialogue-voice'), ttsVoices, ttsDialogueVoice)
+
+        if (ttsVoices.length > 0) {
+          if (!ttsVoice) ttsVoice = ttsVoices[0].voiceURI
+          if (!ttsNarratorVoice) ttsNarratorVoice = ttsVoices[0].voiceURI
+          if (!ttsDialogueVoice && ttsVoices.length > 1) {
+            ttsDialogueVoice = ttsVoices[1].voiceURI
+          } else if (!ttsDialogueVoice) {
+            ttsDialogueVoice = ttsVoices[0].voiceURI
+          }
+        }
+      }
+    }
+
+    function buildTTSSegments(paragraphs) {
+      const segments = []
+      const dialogueRegex = /[\""「『]([^\""」』]+)[\""」』]/g
+      const SHORT_PARA_LEN = 200
+
+      function hasMeaningfulText(text) {
+        const trimmed = text.trim()
+        if (!trimmed) return false
+        return /[\u4e00-\u9fa5a-zA-Z0-9]/.test(trimmed)
+      }
+
+      function addSegment(text, type, paraIdx, globalIdx) {
+        const trimmed = text.trim()
+        if (!hasMeaningfulText(trimmed)) return null
+        return { text: trimmed, type, paraIdx, globalIdx }
+      }
+
+      function splitBySentences(text, type, paraIdx, startGlobalIdx) {
+        const result = []
+        const sentenceEndChars = '。！？!?…'
+        let buffer = ''
+        let globalIdx = startGlobalIdx
+        let i = 0
+
+        while (i < text.length) {
+          const ch = text[i]
+          buffer += ch
+
+          if (sentenceEndChars.indexOf(ch) !== -1) {
+            const seg = addSegment(buffer, type, paraIdx, globalIdx)
+            if (seg) {
+              result.push(seg)
+              globalIdx++
+            }
+            buffer = ''
+          }
+          i++
+        }
+
+        if (buffer.trim()) {
+          const seg = addSegment(buffer, type, paraIdx, globalIdx)
+          if (seg) result.push(seg)
+        }
+
+        return result
+      }
+
+      let globalIdx = 0
+
+      for (let paraIdx = 0; paraIdx < paragraphs.length; paraIdx++) {
+        const para = paragraphs[paraIdx]
+        if (!para || !para.trim()) continue
+
+        const cleanPara = para.replace(/\n+/g, ' ').trim()
+        if (!hasMeaningfulText(cleanPara)) continue
+
+        if (ttsMode === 'single') {
+          if (cleanPara.length <= SHORT_PARA_LEN) {
+            const seg = addSegment(cleanPara, 'narrator', paraIdx, globalIdx)
+            if (seg) {
+              segments.push(seg)
+              globalIdx++
+            }
+          } else {
+            const segs = splitBySentences(cleanPara, 'narrator', paraIdx, globalIdx)
+            if (segs.length > 0) {
+              globalIdx += segs.length
+              segments.push(...segs)
+            } else {
+              const seg = addSegment(cleanPara, 'narrator', paraIdx, globalIdx)
+              if (seg) {
+                segments.push(seg)
+                globalIdx++
+              }
+            }
+          }
+        } else {
+          let lastIndex = 0
+          let match
+          let hasDialogue = false
+          const matches = []
+
+          dialogueRegex.lastIndex = 0
+          while ((match = dialogueRegex.exec(cleanPara)) !== null) {
+            hasDialogue = true
+            matches.push(match)
+          }
+
+          if (!hasDialogue) {
+            if (cleanPara.length <= SHORT_PARA_LEN) {
+              const seg = addSegment(cleanPara, 'narrator', paraIdx, globalIdx)
+              if (seg) {
+                segments.push(seg)
+                globalIdx++
+              }
+            } else {
+              const segs = splitBySentences(cleanPara, 'narrator', paraIdx, globalIdx)
+              if (segs.length > 0) {
+                globalIdx += segs.length
+                segments.push(...segs)
+              } else {
+                const seg = addSegment(cleanPara, 'narrator', paraIdx, globalIdx)
+                if (seg) {
+                  segments.push(seg)
+                  globalIdx++
+                }
+              }
+            }
+          } else {
+            for (const m of matches) {
+              if (m.index > lastIndex) {
+                const beforeText = cleanPara.substring(lastIndex, m.index).trim()
+                if (beforeText && hasMeaningfulText(beforeText)) {
+                  if (beforeText.length <= SHORT_PARA_LEN) {
+                    const seg = addSegment(beforeText, 'narrator', paraIdx, globalIdx)
+                    if (seg) {
+                      segments.push(seg)
+                      globalIdx++
+                    }
+                  } else {
+                    const segs = splitBySentences(beforeText, 'narrator', paraIdx, globalIdx)
+                    if (segs.length > 0) {
+                      globalIdx += segs.length
+                      segments.push(...segs)
+                    }
+                  }
+                }
+              }
+
+              const dialogueText = m[0]
+              if (dialogueText && hasMeaningfulText(dialogueText)) {
+                const seg = addSegment(dialogueText, 'dialogue', paraIdx, globalIdx)
+                if (seg) {
+                  segments.push(seg)
+                  globalIdx++
+                }
+              }
+
+              lastIndex = m.index + m[0].length
+            }
+
+            if (lastIndex < cleanPara.length) {
+              const afterText = cleanPara.substring(lastIndex).trim()
+              if (afterText && hasMeaningfulText(afterText)) {
+                if (afterText.length <= SHORT_PARA_LEN) {
+                  const seg = addSegment(afterText, 'narrator', paraIdx, globalIdx)
+                  if (seg) {
+                    segments.push(seg)
+                    globalIdx++
+                  }
+                } else {
+                  const segs = splitBySentences(afterText, 'narrator', paraIdx, globalIdx)
+                  if (segs.length > 0) {
+                    globalIdx += segs.length
+                    segments.push(...segs)
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      return segments
+    }
+
+    function getVoiceForSegment(segment) {
+      if (ttsMode === 'single') {
+        return ttsVoice
+      }
+      return segment.type === 'dialogue' ? ttsDialogueVoice : ttsNarratorVoice
+    }
+
+    function findParagraphElement(chapterIdx, paraIdx) {
+      const block = document.querySelector(`.chapter-block[data-chapter-idx="${chapterIdx}"]`)
+      if (!block) return null
+      let p = block.querySelector(`p[data-para-idx="${paraIdx}"]`)
+      if (!p) {
+        const allP = block.querySelectorAll('p')
+        let fallback = null
+        for (let i = 0; i < allP.length; i++) {
+          const idx = parseInt(allP[i].dataset.paraIdx, 10)
+          if (idx >= paraIdx) {
+            fallback = allP[i]
+            break
+          }
+        }
+        if (fallback) p = fallback
+      }
+      return p || null
+    }
+
+    function getCurrentChapterParagraphs() {
+      const allParagraphs = []
+      let paraOffset = 0
+      let targetChapterOffset = 0
+
+      for (let i = renderedChapterRange.start; i <= renderedChapterRange.end; i++) {
+        const data = loadedChapters.get(i)
+        if (!data) continue
+        if (i === currentChapterIdx) {
+          targetChapterOffset = allParagraphs.length
+        }
+        for (const p of data.paragraphs) {
+          allParagraphs.push({ text: p, chapterIdx: i, paraIdxInChapter: allParagraphs.length - (i === currentChapterIdx ? targetChapterOffset : 0) })
+        }
+      }
+
+      const data = loadedChapters.get(currentChapterIdx)
+      if (!data) return { paragraphs: [], startOffset: 0 }
+
+      return {
+        paragraphs: data.paragraphs,
+        chapterIdx: currentChapterIdx,
+        startOffset: targetChapterOffset
+      }
+    }
+
+    function findStartSegmentIndex() {
+      const contentEl = $('novel-content')
+      const topBar = $('novel-top-bar')
+      const topBarBottom = topBar ? topBar.getBoundingClientRect().bottom : 0
+
+      const blocks = contentEl.querySelectorAll('.chapter-block')
+      let firstVisibleParaChapter = -1
+      let firstVisibleParaIdx = -1
+
+      for (const block of blocks) {
+        const chapterIdx = parseInt(block.dataset.chapterIdx, 10)
+        const paras = block.querySelectorAll('p')
+        for (let pIdx = 0; pIdx < paras.length; pIdx++) {
+          const p = paras[pIdx]
+          const pRect = p.getBoundingClientRect()
+          if (pRect.bottom > topBarBottom) {
+            firstVisibleParaChapter = chapterIdx
+            firstVisibleParaIdx = parseInt(p.dataset.paraIdx, 10)
+            if (isNaN(firstVisibleParaIdx)) firstVisibleParaIdx = pIdx
+            break
+          }
+        }
+        if (firstVisibleParaChapter !== -1) break
+      }
+
+      if (firstVisibleParaChapter === -1) return 0
+
+      let globalIdx = 0
+      for (let ci = renderedChapterRange.start; ci < firstVisibleParaChapter; ci++) {
+        const cd = loadedChapters.get(ci)
+        if (cd) {
+          globalIdx += buildTTSSegments(cd.paragraphs).length
+        }
+      }
+
+      const currentChapterData = loadedChapters.get(firstVisibleParaChapter)
+      if (currentChapterData) {
+        for (let pIdx = 0; pIdx < firstVisibleParaIdx; pIdx++) {
+          const segs = buildTTSSegments([currentChapterData.paragraphs[pIdx]])
+          globalIdx += segs.length
+        }
+      }
+
+      return globalIdx
+    }
+
+    function buildAllSegmentsForRange() {
+      const allSegments = []
+      for (let i = renderedChapterRange.start; i <= renderedChapterRange.end; i++) {
+        const data = loadedChapters.get(i)
+        if (!data) continue
+        const segs = buildTTSSegments(data.paragraphs)
+        for (const s of segs) {
+          s.chapterIdx = i
+        }
+        allSegments.push(...segs)
+      }
+      return allSegments
+    }
+
+    function findSentenceByText(pEl, searchText) {
+      if (!pEl || !searchText) return null
+      const sentenceEls = pEl.querySelectorAll('.tts-sentence')
+      const normalizedSearch = searchText.replace(/\s+/g, '').trim()
+      if (!normalizedSearch) return null
+
+      let bestMatch = null
+      let bestScore = 0
+
+      for (const el of sentenceEls) {
+        const elText = el.textContent.replace(/\s+/g, '').trim()
+        if (!elText) continue
+
+        if (elText === normalizedSearch) {
+          return el
+        }
+
+        if (elText.includes(normalizedSearch) || normalizedSearch.includes(elText)) {
+          const score = Math.min(elText.length, normalizedSearch.length) / Math.max(elText.length, normalizedSearch.length)
+          if (score > bestScore) {
+            bestScore = score
+            bestMatch = el
+          }
+        }
+      }
+
+      if (bestScore > 0.5) {
+        return bestMatch
+      }
+
+      return null
+    }
+
+    function findParagraphByText(chapterIdx, searchText) {
+      const block = document.querySelector(`.chapter-block[data-chapter-idx="${chapterIdx}"]`)
+      if (!block || !searchText) return null
+      const pEls = block.querySelectorAll('p')
+      const normalizedSearch = searchText.replace(/\s+/g, '').trim()
+      if (!normalizedSearch) return null
+
+      let bestMatch = null
+      let bestScore = 0
+
+      for (const p of pEls) {
+        const pText = p.textContent.replace(/\s+/g, '').trim()
+        if (!pText) continue
+
+        if (pText === normalizedSearch) {
+          return p
+        }
+
+        if (pText.includes(normalizedSearch) || normalizedSearch.includes(pText)) {
+          const score = Math.min(pText.length, normalizedSearch.length) / Math.max(pText.length, normalizedSearch.length)
+          if (score > bestScore) {
+            bestScore = score
+            bestMatch = p
+          }
+        }
+      }
+
+      if (bestScore > 0.3) {
+        return bestMatch
+      }
+
+      return null
+    }
+
+    function highlightCurrentSegment() {
+      if (ttsCurrentParagraphEl) {
+        ttsCurrentParagraphEl.classList.remove('tts-highlight')
+        const prevSentence = ttsCurrentParagraphEl.querySelector('.tts-sentence.tts-highlight-sentence')
+        if (prevSentence) prevSentence.classList.remove('tts-highlight-sentence')
+      }
+
+      if (!ttsPlaying || ttsCurrentSegIdx >= ttsSegments.length) return
+
+      const seg = ttsSegments[ttsCurrentSegIdx]
+      if (!seg) return
+
+      let pEl = findParagraphElement(seg.chapterIdx, seg.paraIdx)
+
+      if (!pEl) {
+        pEl = findParagraphByText(seg.chapterIdx, seg.text)
+      }
+
+      if (pEl) {
+        if (pEl !== ttsCurrentParagraphEl) {
+          scheduleSaveReadingPosition('novel', currentNovel.id, {
+            chapterIdx: seg.chapterIdx,
+            paraIdx: seg.paraIdx,
+            scrollTop: $('novel-content').scrollTop
+          })
+        }
+        pEl.classList.add('tts-highlight')
+        ttsCurrentParagraphEl = pEl
+
+        let sentenceEl = null
+        if (seg.sentenceIdx != null) {
+          sentenceEl = pEl.querySelector(`.tts-sentence[data-sentence-idx="${seg.sentenceIdx}"]`)
+        }
+
+        if (!sentenceEl) {
+          sentenceEl = findSentenceByText(pEl, seg.text)
+        }
+
+        if (sentenceEl) {
+          sentenceEl.classList.add('tts-highlight-sentence')
+        }
+
+        const contentEl = $('novel-content')
+        const topBar = $('novel-top-bar')
+        const topBarHeight = topBar ? topBar.offsetHeight : 60
+        const bottomBarHeight = 0
+
+        const contentRect = contentEl.getBoundingClientRect()
+        const elRect = sentenceEl ? sentenceEl.getBoundingClientRect() : pEl.getBoundingClientRect()
+        const elTopRelative = elRect.top - contentRect.top + contentEl.scrollTop
+        const elBottomRelative = elRect.bottom - contentRect.top + contentEl.scrollTop
+
+        const viewTop = contentEl.scrollTop + topBarHeight
+        const viewBottom = viewTop + contentEl.clientHeight - topBarHeight - bottomBarHeight
+        const topOffset = topBarHeight + 20
+        const bottomOffset = bottomBarHeight + 40
+
+        if (elTopRelative < viewTop || elBottomRelative > viewBottom - bottomOffset) {
+          const targetScroll = Math.max(0, elTopRelative - topOffset)
+          contentEl.scrollTo({
+            top: targetScroll,
+            behavior: 'smooth'
+          })
+        }
+      }
+
+      updateTTSStatus()
+    }
+
+    function updateTTSStatus() {
+      // TTS状态栏已移除，此函数保留为空以兼容调用
+    }
+
+    function playTTS() {
+      if (ttsPlaying && !ttsPaused) {
+        pauseTTS()
+        return
+      }
+
+      if (ttsPaused && ttsAudio) {
+        ttsAudio.play()
+        ttsPaused = false
+        ttsPlaying = true
+        $('novel-tts-fab').classList.add('playing')
+        updateTTSStatus()
+        return
+      }
+
+      if (ttsPaused && ttsUtterance && ttsEngine === 'system') {
+        speechSynthesis.resume()
+        ttsPaused = false
+        ttsPlaying = true
+        $('novel-tts-fab').classList.add('playing')
+        updateTTSStatus()
+        return
+      }
+
+      if (renderedChapterRange.start < 0 || renderedChapterRange.end < 0) {
+        showError('章节正在加载中，请稍后再试')
+        return
+      }
+
+      let hasLoadedChapter = false
+      for (let i = renderedChapterRange.start; i <= renderedChapterRange.end; i++) {
+        if (loadedChapters.has(i)) {
+          hasLoadedChapter = true
+          break
+        }
+      }
+      if (!hasLoadedChapter) {
+        showError('章节内容加载失败，请刷新页面重试')
+        return
+      }
+
+      ttsSegments = buildAllSegmentsForRange()
+      if (ttsSegments.length === 0) {
+        showError('没有可朗读的内容，请检查章节内容')
+        return
+      }
+
+      ttsCurrentSegIdx = findStartSegmentIndex()
+      if (ttsCurrentSegIdx >= ttsSegments.length || ttsCurrentSegIdx < 0) {
+        ttsCurrentSegIdx = 0
+      }
+
+      ttsPlaying = true
+      ttsPaused = false
+      $('novel-tts-fab').classList.add('playing')
+
+      startPlayback()
+    }
+
+    function getCacheKey(segIdx) {
+      const seg = ttsSegments[segIdx]
+      if (!seg) return null
+      const voiceId = getVoiceForSegment(seg)
+      return `${segIdx}_${voiceId}_${ttsRate}_${seg.text}`
+    }
+
+    async function preloadAudioForSegment(segIdx) {
+      if (segIdx >= ttsSegments.length) return null
+      const cacheKey = getCacheKey(segIdx)
+      if (!cacheKey) return null
+
+      if (ttsAudioCache.has(cacheKey)) {
+        const cached = ttsAudioCache.get(cacheKey)
+        if (cached.status === 'ready') return cached.url
+        if (cached.status === 'loading') return cached.promise
+      }
+
+      const seg = ttsSegments[segIdx]
+      const voiceId = getVoiceForSegment(seg)
+
+      const controller = new AbortController()
+      ttsPreloadControllers.add(controller)
+
+      const promise = (async () => {
+        try {
+          const response = await fetch('/api/novel/tts/speak', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: seg.text, voice: voiceId, rate: ttsRate }),
+            signal: controller.signal
+          })
+          if (!response.ok) throw new Error(await response.text() || 'TTS request failed')
+          const audioBlob = await response.blob()
+          const audioUrl = URL.createObjectURL(audioBlob)
+          ttsAudioCache.set(cacheKey, { status: 'ready', url: audioUrl })
+          return audioUrl
+        } catch (e) {
+          if (e.name !== 'AbortError') {
+            console.warn('Preload audio failed for seg', segIdx, ':', e)
+            ttsAudioCache.delete(cacheKey)
+          }
+          throw e
+        } finally {
+          ttsPreloadControllers.delete(controller)
+        }
+      })()
+
+      ttsAudioCache.set(cacheKey, { status: 'loading', promise })
+      return promise
+    }
+
+    function preloadAhead() {
+      const startIdx = ttsCurrentSegIdx + 1
+      const endIdx = Math.min(ttsCurrentSegIdx + TTS_PRELOAD_COUNT, ttsSegments.length - 1)
+      for (let i = startIdx; i <= endIdx; i++) {
+        const cacheKey = getCacheKey(i)
+        if (cacheKey && !ttsAudioCache.has(cacheKey)) {
+          preloadAudioForSegment(i).catch(() => {})
+        }
+      }
+    }
+
+    async function getAudioUrlForSegment(segIdx) {
+      const cacheKey = getCacheKey(segIdx)
+      if (!cacheKey) throw new Error('Invalid segment')
+
+      const cached = ttsAudioCache.get(cacheKey)
+      if (cached) {
+        if (cached.status === 'ready') return cached.url
+        if (cached.status === 'loading') return await cached.promise
+      }
+
+      return await preloadAudioForSegment(segIdx)
+    }
+
+    function cleanupOldCache() {
+      const keepFrom = Math.max(0, ttsCurrentSegIdx - 1)
+      const keepTo = Math.min(ttsSegments.length - 1, ttsCurrentSegIdx + TTS_PRELOAD_COUNT + 1)
+      for (const [key, value] of ttsAudioCache) {
+        const segIdx = parseInt(key.split('_')[0], 10)
+        if (segIdx < keepFrom || segIdx > keepTo) {
+          if (value.status === 'ready' && value.url && value.url.startsWith('blob:')) {
+            URL.revokeObjectURL(value.url)
+          }
+          ttsAudioCache.delete(key)
+        }
+      }
+    }
+
+    function abortAllPreloads() {
+      for (const controller of ttsPreloadControllers) {
+        try { controller.abort() } catch (e) {}
+      }
+      ttsPreloadControllers.clear()
+    }
+
+    function startPlayback() {
+      if (ttsEngine !== 'edge') {
+        speakNextSegmentSystem()
+        return
+      }
+      if (!ttsAudio) {
+        ttsAudio = new Audio()
+        ttsAudio.playbackRate = ttsRate
+        ttsAudio.onended = () => {
+          if (!ttsPlaying) return
+          ttsCurrentSegIdx++
+          playCurrentEdgeSegment()
+        }
+        ttsAudio.onerror = (e) => {
+          console.warn('Audio playback error:', e)
+          if (!ttsPlaying) return
+          ttsCurrentSegIdx++
+          playCurrentEdgeSegment()
+        }
+      }
+      preloadAhead()
+      playCurrentEdgeSegment()
+    }
+
+    async function playCurrentEdgeSegment() {
+      if (!ttsPlaying || ttsPaused) return
+      if (ttsCurrentSegIdx >= ttsSegments.length) {
+        if (renderedChapterRange.end < novelChapters.length - 1) {
+          await loadMoreChaptersForward()
+          ttsSegments = buildAllSegmentsForRange()
+          if (ttsCurrentSegIdx < ttsSegments.length) {
+            preloadAhead()
+            playCurrentEdgeSegment()
+          } else { stopTTS() }
+        } else { stopTTS() }
+        return
+      }
+      const seg = ttsSegments[ttsCurrentSegIdx]
+      highlightCurrentSegment()
+      updateTTSStatus()
+      preloadAhead()
+      try {
+        const audioUrl = await getAudioUrlForSegment(ttsCurrentSegIdx)
+        const prevSrc = ttsAudio.src
+        ttsAudio.src = audioUrl
+        ttsAudio.playbackRate = ttsRate
+        if (prevSrc && prevSrc.startsWith('blob:')) {
+          const prevCacheKey = getCacheKey(ttsCurrentSegIdx - 1)
+          if (!prevCacheKey || !ttsAudioCache.has(prevCacheKey)) {
+            URL.revokeObjectURL(prevSrc)
+          }
+        }
+        cleanupOldCache()
+        await ttsAudio.play()
+      } catch (e) {
+        console.error('Edge TTS play error:', e)
+        if (e.name === 'AbortError') {
+          if (!ttsPlaying) return
+          ttsCurrentSegIdx++
+          playCurrentEdgeSegment()
+          return
+        }
+        showError('朗读失败: ' + e.message)
+        if (!ttsPlaying) return
+        ttsCurrentSegIdx++
+        playCurrentEdgeSegment()
+      }
+    }
+
+    function speakNextSegmentSystem() {
+      if (!ttsPlaying || ttsPaused) return
+      if (ttsCurrentSegIdx >= ttsSegments.length) { stopTTS(); return }
+      const seg = ttsSegments[ttsCurrentSegIdx]
+      highlightCurrentSegment()
+      updateTTSStatus()
+      const text = seg.text
+      const voiceId = getVoiceForSegment(seg)
+      if ('speechSynthesis' in window) {
+        speechSynthesis.cancel()
+        ttsUtterance = new SpeechSynthesisUtterance(text)
+        ttsUtterance.rate = ttsRate
+        const sysVoices = speechSynthesis.getVoices()
+        const voice = sysVoices.find(v => v.voiceURI === voiceId || v.name === voiceId || v.voiceURI === ttsVoice || v.name === ttsVoice)
+        if (voice) { try { ttsUtterance.voice = voice } catch (e) { console.warn('Failed to set voice:', e) } }
+        ttsUtterance.onend = () => {
+          if (!ttsPlaying) return
+          ttsCurrentSegIdx++
+          speakNextSegmentSystem()
+        }
+        ttsUtterance.onerror = (e) => {
+          console.warn('TTS error:', e)
+          if (!ttsPlaying) return
+          ttsCurrentSegIdx++
+          speakNextSegmentSystem()
+        }
+        speechSynthesis.speak(ttsUtterance)
+      }
+    }
+
+    function pauseTTS() {
+      ttsPaused = true
+      ttsPlaying = false
+      $('novel-tts-fab').classList.remove('playing')
+
+      if (ttsEngine === 'edge' && ttsAudio) {
+        ttsAudio.pause()
+      } else if (ttsEngine === 'system' && 'speechSynthesis' in window) {
+        speechSynthesis.pause()
+      }
+
+      updateTTSStatus()
+    }
+
+    function stopTTS() {
+      ttsPlaying = false
+      ttsPaused = false
+      ttsCurrentSegIdx = 0
+      ttsSegments = []
+      $('novel-tts-fab').classList.remove('playing')
+
+      abortAllPreloads()
+
+      for (const [key, value] of ttsAudioCache) {
+        if (value.status === 'ready' && value.url && value.url.startsWith('blob:')) {
+          URL.revokeObjectURL(value.url)
+        }
+      }
+      ttsAudioCache.clear()
+
+      if (ttsEngine === 'edge' && ttsAudio) {
+        ttsAudio.pause()
+        if (ttsAudio.src && ttsAudio.src.startsWith('blob:')) {
+          URL.revokeObjectURL(ttsAudio.src)
+        }
+        ttsAudio.src = ''
+      } else if ('speechSynthesis' in window) {
+        speechSynthesis.cancel()
+      }
+
+      if (ttsCurrentParagraphEl) {
+        ttsCurrentParagraphEl.classList.remove('tts-highlight')
+        const prevSentence = ttsCurrentParagraphEl.querySelector('.tts-sentence.tts-highlight-sentence')
+        if (prevSentence) prevSentence.classList.remove('tts-highlight-sentence')
+        ttsCurrentParagraphEl = null
+      }
+      ttsUtterance = null
+    }
+
+    function prevTTSSegment() {
+      if (ttsCurrentSegIdx > 0) {
+        const wasPlaying = ttsPlaying
+        stopTTS()
+        ttsCurrentSegIdx = Math.max(0, ttsCurrentSegIdx - 1)
+        ttsSegments = buildAllSegmentsForRange()
+        if (wasPlaying) {
+          ttsPlaying = true
+          ttsPaused = false
+          $('novel-tts-fab').classList.add('playing')
+          startPlayback()
+        }
+      }
+    }
+
+    function nextTTSSegment() {
+      const wasPlaying = ttsPlaying
+      const currentIdx = ttsCurrentSegIdx
+      stopTTS()
+      ttsCurrentSegIdx = currentIdx + 1
+      ttsSegments = buildAllSegmentsForRange()
+      if (ttsCurrentSegIdx >= ttsSegments.length) {
+        ttsCurrentSegIdx = Math.max(0, ttsSegments.length - 1)
+      }
+      if (wasPlaying) {
+        ttsPlaying = true
+        ttsPaused = false
+        $('novel-tts-fab').classList.add('playing')
+        startPlayback()
+      }
+    }
+
+    let ttsFabDragging = false
+    let ttsFabDragStartX = 0
+    let ttsFabDragStartY = 0
+    let ttsFabStartLeft = 0
+    let ttsFabStartTop = 0
+    let ttsFabMoved = false
+
+    function setupTTSFabDrag() {
+      const fab = $('novel-tts-fab')
+      if (!fab) return
+
+      let dragStarted = false
+
+      fab.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return
+        ttsFabDragging = true
+        ttsFabMoved = false
+        dragStarted = false
+        ttsFabDragStartX = e.clientX
+        ttsFabDragStartY = e.clientY
+        e.preventDefault()
+      })
+
+      document.addEventListener('mousemove', (e) => {
+        if (!ttsFabDragging) return
+        const dx = e.clientX - ttsFabDragStartX
+        const dy = e.clientY - ttsFabDragStartY
+        if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
+          ttsFabMoved = true
+        }
+        if (ttsFabMoved && !dragStarted) {
+          dragStarted = true
+          const rect = fab.getBoundingClientRect()
+          ttsFabStartLeft = rect.left
+          ttsFabStartTop = rect.top
+          fab.style.right = 'auto'
+          fab.style.bottom = 'auto'
+          fab.style.left = rect.left + 'px'
+          fab.style.top = rect.top + 'px'
+        }
+        if (!dragStarted) return
+        let newLeft = ttsFabStartLeft + dx
+        let newTop = ttsFabStartTop + dy
+        const fabWidth = fab.offsetWidth
+        const fabHeight = fab.offsetHeight
+        newLeft = Math.max(10, Math.min(window.innerWidth - fabWidth - 10, newLeft))
+        newTop = Math.max(10, Math.min(window.innerHeight - fabHeight - 10, newTop))
+        fab.style.left = newLeft + 'px'
+        fab.style.top = newTop + 'px'
+      })
+
+      document.addEventListener('mouseup', (e) => {
+        if (!ttsFabDragging) return
+        ttsFabDragging = false
+        if (ttsFabMoved && dragStarted) {
+          const rect = fab.getBoundingClientRect()
+          const centerX = rect.left + rect.width / 2
+          if (centerX < window.innerWidth / 2) {
+            fab.style.left = '20px'
+            fab.style.right = 'auto'
+          } else {
+            fab.style.left = 'auto'
+            fab.style.right = '20px'
+          }
+          fab.style.top = 'auto'
+          fab.style.bottom = '30px'
+          localStorage.setItem('tts_fab_side', centerX < window.innerWidth / 2 ? 'left' : 'right')
+        }
+      })
+
+      fab.addEventListener('click', (e) => {
+        if (ttsFabMoved) return
+        playTTS()
+      })
+
+      const savedSide = localStorage.getItem('tts_fab_side')
+      if (savedSide === 'left') {
+        fab.style.right = 'auto'
+        fab.style.left = '20px'
+      }
+    }
+
     async function openBook(book) {
       try {
-        const data = await fetchJSON(`/api/archives/${encodeURIComponent(book.arcid)}/files`)
         currentBook = book
-        currentPages = data.pages || []
         currentPage = 1
-
-        $('reader-title').textContent = book.title
-        $('page-count').textContent = `/ ${currentPages.length}`
-        $('page-slider').max = currentPages.length
-        $('page-slider').value = 1
-        $('page-input').max = currentPages.length
-        $('page-input').value = 1
-        $('reader-mode').value = readerMode
-
+        preloadedImages.clear()
         $('library-view').classList.add('hidden')
         $('reader-view').classList.remove('hidden')
+        $('reader-title').textContent = extractBookTitle(book.title)
+
+        const query = new URLSearchParams({ _t: Date.now().toString() })
+        const data = await fetchJSON(`/api/archives/${encodeURIComponent(book.arcid)}/metadata?${query.toString()}`)
+        const pages = data.pages || []
+        currentPages = pages.map(p => `/api/archives/${encodeURIComponent(book.arcid)}/page/${p}`)
+
+        $('page-slider').max = currentPages.length
+        $('page-slider').value = 1
+        $('page-input').value = 1
+
+        const savedPos = await getReadingPosition('manga', book.id)
+        if (savedPos && savedPos.page && savedPos.page <= currentPages.length) {
+          currentPage = savedPos.page
+        }
 
         renderReader()
       } catch (err) {
@@ -397,14 +2529,13 @@
     function closeReader() {
       $('reader-view').classList.add('hidden')
       $('library-view').classList.remove('hidden')
-      currentBook = null
-      currentPages = []
-      currentPage = 1
-      preloadedImages.clear()
       if (waterfallObserver) {
         waterfallObserver.disconnect()
         waterfallObserver = null
       }
+      currentBook = null
+      currentPages = []
+      preloadedImages.clear()
     }
 
     function renderReader() {
@@ -435,6 +2566,22 @@
           $('reader-top-bar').classList.remove('scrolled-down')
         }
         lastScrollTop = st <= 0 ? 0 : st
+
+        const imgs = container.querySelectorAll('img')
+        let currentImgIdx = 0
+        for (let i = 0; i < imgs.length; i++) {
+          const img = imgs[i]
+          const rect = img.getBoundingClientRect()
+          if (rect.top < window.innerHeight * 0.7) {
+            currentImgIdx = i + 1
+          }
+        }
+        if (currentBook && currentImgIdx > 0) {
+          scheduleSaveReadingPosition('manga', currentBook.id, {
+            page: currentImgIdx,
+            scrollTop: st
+          })
+        }
       }
 
       waterfallObserver = new IntersectionObserver((entries) => {
@@ -466,6 +2613,7 @@
       $('page-slider').value = currentPage
       $('page-input').value = currentPage
       preloadNeighbors()
+      scheduleSaveReadingPosition('manga', currentBook.id, { page: currentPage, scrollTop: 0 })
     }
 
     function preloadNeighbors() {
@@ -502,6 +2650,18 @@
       return div.innerHTML
     }
 
+    function extractBookTitle(title) {
+      if (!title) return ''
+      const str = String(title).trim()
+      const m1 = str.match(/《([^》]+)》/)
+      if (m1) return m1[1].trim()
+      const m2 = str.match(/<([^>]+)>/)
+      if (m2) return m2[1].trim()
+      const m3 = str.match(/【([^】]+)】/)
+      if (m3) return m3[1].trim()
+      return str
+    }
+
     function formatSize(bytes) {
       if (!bytes || isNaN(bytes)) return '?'
       const units = ['B', 'KB', 'MB', 'GB']
@@ -514,10 +2674,15 @@
       return size.toFixed(1) + ' ' + units[i]
     }
 
-    // Events
-    $('search-btn').addEventListener('click', loadLibrary)
-    $('refresh-btn').addEventListener('click', loadLibrary)
-    $('search-input').addEventListener('keydown', e => { if (e.key === 'Enter') loadLibrary() })
+    $('btn-manga').addEventListener('click', () => switchType('manga'))
+    $('btn-novel').addEventListener('click', () => switchType('novel'))
+    $('search-btn').addEventListener('click', () => currentType === 'manga' ? loadLibrary() : loadNovelLibrary())
+    $('refresh-btn').addEventListener('click', () => currentType === 'manga' ? loadLibrary() : loadNovelLibrary())
+    $('search-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        currentType === 'manga' ? loadLibrary() : loadNovelLibrary()
+      }
+    })
 
     $('back-btn').addEventListener('click', closeReader)
     $('prev-btn').addEventListener('click', prevPage)
@@ -543,7 +2708,148 @@
       updatePage()
     })
 
+    $('novel-back-btn').addEventListener('click', closeNovelReader)
+    $('novel-chapter-btn').addEventListener('click', () => {
+      $('novel-chapter-list').classList.toggle('open')
+      $('novel-chapter-overlay').classList.toggle('open')
+    })
+    $('novel-chapter-overlay').addEventListener('click', () => {
+      $('novel-chapter-list').classList.remove('open')
+      $('novel-chapter-overlay').classList.remove('open')
+    })
+
+    $('novel-settings-btn').addEventListener('click', () => {
+      $('novel-settings-panel').classList.add('open')
+      $('novel-settings-overlay').classList.add('open')
+    })
+    $('novel-settings-close').addEventListener('click', () => {
+      $('novel-settings-panel').classList.remove('open')
+      $('novel-settings-overlay').classList.remove('open')
+    })
+    $('novel-settings-overlay').addEventListener('click', () => {
+      $('novel-settings-panel').classList.remove('open')
+      $('novel-settings-overlay').classList.remove('open')
+    })
+
+    document.querySelectorAll('#bg-color-swatches .color-swatch').forEach(swatch => {
+      swatch.addEventListener('click', () => {
+        novelSettings.bgColor = swatch.dataset.bg
+        novelSettings.fgColor = swatch.dataset.fg
+        applyNovelSettings()
+        saveNovelSettings()
+        document.querySelectorAll('#bg-color-swatches .color-swatch').forEach(s => s.classList.remove('active'))
+        swatch.classList.add('active')
+      })
+    })
+
+    document.querySelectorAll('#font-samples .font-sample').forEach(sample => {
+      sample.addEventListener('click', () => {
+        novelSettings.fontFamily = sample.dataset.font
+        applyNovelSettings()
+        saveNovelSettings()
+        document.querySelectorAll('#font-samples .font-sample').forEach(s => s.classList.remove('active'))
+        sample.classList.add('active')
+      })
+    })
+
+    document.querySelectorAll('.slider-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const action = btn.dataset.action
+        const slider = btn.parentElement.querySelector('input[type="range"]')
+        if (!slider) return
+
+        let val = parseFloat(slider.value)
+        const step = parseFloat(slider.step) || 1
+        const min = parseFloat(slider.min)
+        const max = parseFloat(slider.max)
+
+        if (action.includes('inc')) {
+          val = Math.min(max, val + step)
+        } else if (action.includes('dec')) {
+          val = Math.max(min, val - step)
+        }
+
+        slider.value = val
+        slider.dispatchEvent(new Event('input'))
+      })
+    })
+
+    $('font-size-slider').addEventListener('input', e => {
+      novelSettings.fontSize = parseInt(e.target.value)
+      $('font-size-value').textContent = novelSettings.fontSize + 'px'
+      applyNovelSettings()
+      saveNovelSettings()
+    })
+
+    $('line-height-slider').addEventListener('input', e => {
+      novelSettings.lineHeight = parseFloat(e.target.value)
+      $('line-height-value').textContent = novelSettings.lineHeight.toFixed(1)
+      applyNovelSettings()
+      saveNovelSettings()
+    })
+
+    $('tts-engine').addEventListener('change', e => {
+      ttsEngine = e.target.value
+      loadTTSVoices()
+      saveTTSSettings()
+      stopTTS()
+    })
+
+    $('tts-mode').addEventListener('change', e => {
+      ttsMode = e.target.value
+      const isDialogue = ttsMode === 'dialogue'
+      $('tts-voice-section').style.display = isDialogue ? 'none' : 'block'
+      $('tts-narrator-section').style.display = isDialogue ? 'block' : 'none'
+      $('tts-dialogue-section').style.display = isDialogue ? 'block' : 'none'
+      if (ttsPlaying) stopTTS()
+      saveTTSSettings()
+    })
+
+    $('tts-voice').addEventListener('change', e => {
+      ttsVoice = e.target.value
+      saveTTSSettings()
+    })
+    $('tts-narrator-voice').addEventListener('change', e => {
+      ttsNarratorVoice = e.target.value
+      saveTTSSettings()
+    })
+    $('tts-dialogue-voice').addEventListener('change', e => {
+      ttsDialogueVoice = e.target.value
+      saveTTSSettings()
+    })
+
+    $('tts-rate-slider').addEventListener('input', e => {
+      ttsRate = parseFloat(e.target.value)
+      $('tts-rate-value').textContent = ttsRate.toFixed(1) + 'x'
+      saveTTSSettings()
+    })
+
+    setupTTSFabDrag()
+    if ('speechSynthesis' in window) {
+      speechSynthesis.onvoiceschanged = () => {
+        if (currentNovel) {
+          loadTTSVoices()
+        }
+      }
+    }
+
     document.addEventListener('keydown', e => {
+      if (!$('novel-reader-view').classList.contains('hidden')) {
+        if (e.key === 'Escape') {
+          closeNovelReader()
+        } else if (e.key === 'p' || e.key === 'P') {
+          if (ttsPlaying) {
+            pauseTTS()
+          } else {
+            playTTS()
+          }
+        } else if (e.key === '[') {
+          prevTTSSegment()
+        } else if (e.key === ']') {
+          nextTTSSegment()
+        }
+        return
+      }
       if ($('reader-view').classList.contains('hidden')) return
       if (readerMode !== 'page') return
       switch (e.key) {
@@ -555,8 +2861,11 @@
       }
     })
 
-    // Init
-    loadLibrary()
+    if (currentType === 'novel') {
+      switchType('novel')
+    } else {
+      loadLibrary()
+    }
   </script>
 </body>
 </html>

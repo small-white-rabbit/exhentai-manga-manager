@@ -37,14 +37,17 @@ const coverUrl = computed(() => {
 
 <style scoped>
 .novel-card {
+  display: inline-block;
+  width: 220px;
+  min-height: 320px;
   background: #252525;
   border-radius: 8px;
   overflow: hidden;
   cursor: pointer;
   transition: transform 0.15s, box-shadow 0.15s;
+  margin: 6px 6px;
   display: flex;
   flex-direction: column;
-  height: 280px;
 }
 .novel-card:hover {
   transform: translateY(-3px);
@@ -52,7 +55,7 @@ const coverUrl = computed(() => {
 }
 .novel-cover {
   width: 100%;
-  height: 200px;
+  height: 230px;
   background: #111;
   display: flex;
   align-items: center;
@@ -62,6 +65,7 @@ const coverUrl = computed(() => {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  border-radius: 8px 8px 0 0;
 }
 .novel-cover-placeholder {
   color: #666;

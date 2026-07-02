@@ -7,16 +7,16 @@
 */
 @font-face {
   font-family: 'JingHuaLaoSongTi';
-  src: url('/fonts/JingHuaLaoSongTi.woff2') format('woff2');
+  src: url('./JingHuaLaoSongTi.ttf') format('truetype');
   font-display: swap;
 }
 @font-face {
   font-family: 'LXGWWenKai';
-  src: url('/fonts/LXGWWenKai.woff2') format('woff2');
+  src: url('./LXGWWenKai.woff2') format('woff2');
   font-display: swap;
 }
 @font-face {
   font-family: 'LangManYaYuan';
-  src: url('/fonts/LangManYaYuan.woff2') format('woff2');
+  src: url('./LangManYaYuan.woff2') format('woff2');
   font-display: swap;
 }

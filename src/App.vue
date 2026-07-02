@@ -2,19 +2,17 @@
   <el-config-provider :locale="localeFile">
     <div id="progressbar" :style="{ width: progress + '%' }"></div>
     <el-button class="fullscreen-button" circle :icon="FullScreen" size="large" @click="switchFullscreen"></el-button>
-    <el-row :gutter="20" class="book-search-bar">
-      <el-col :span="2" :offset="1">
-        <el-button-group v-if="setting.enableNovel">
+    <div class="book-search-bar">
+      <div class="search-bar-left">
+        <el-button-group v-if="setting.enableNovel" class="mode-switch-group">
           <el-button :type="activeTab === 'manga' ? 'primary' : ''" :icon="Reading" @click="activeTab = 'manga'" title="漫画"></el-button>
           <el-button :type="activeTab === 'novel' ? 'primary' : ''" :icon="Document" @click="activeTab = 'novel'" title="小说"></el-button>
         </el-button-group>
-      </el-col>
-      <template v-if="!setting.enableNovel || activeTab === 'manga'">
-      <el-col :span="1">
-        <el-button type="primary" :icon="TreeViewAlt" plain @click="$refs.FolderTreeRef.openFolderTree()" :title="$t('m.folderTree')"></el-button>
-      </el-col>
-      <el-col :span="8">
+        <el-button type="primary" :icon="TreeViewAlt" plain @click="$refs.FolderTreeRef.openFolderTree()" :title="$t('m.folderTree')" v-if="!setting.enableNovel || activeTab === 'manga'"></el-button>
+      </div>
+      <div class="search-bar-center">
         <el-autocomplete
+          v-if="!setting.enableNovel || activeTab === 'manga'"
           :model-value="searchString"
           :fetch-suggestions="querySearch"
           @keyup.enter="searchBook"
@@ -29,95 +27,69 @@
             <span class="autocomplete-value">{{ item.value }}</span>
           </template>
         </el-autocomplete>
-      </el-col>
-      <el-col :span="1">
-        <el-button type="primary" :icon="Search32Filled" plain @click="searchBook" :title="$t('m.search')"></el-button>
-      </el-col>
-      <el-col :span="1">
-        <el-button :icon="MdShuffle" plain @click="shuffleBook" :title="$t('m.shuffle')"></el-button>
-      </el-col>
-      <el-col :span="1">
+        <el-input
+          v-else
+          v-model="novelSearchString"
+          :placeholder="$t('m.search')"
+          clearable
+          class="search-input"
+          @keyup.enter="$refs.NovelLibraryRef && $refs.NovelLibraryRef.searchNovel(novelSearchString)"
+        ></el-input>
+      </div>
+      <div class="search-bar-right">
+        <el-button type="primary" :icon="Search32Filled" plain @click="handleSearchClick" :title="$t('m.search')"></el-button>
+        <el-button :icon="MdShuffle" plain @click="handleShuffle" :title="$t('m.shuffle')"></el-button>
         <el-button type="primary" :icon="MdRefresh" plain :title="$t('m.manualScan')"
-          @click="loadBookList(true)" :loading="buttonLoadBookListLoading"></el-button>
-      </el-col>
-      <el-col :span="1">
+          @click="handleScan" :loading="buttonLoadBookListLoading"></el-button>
         <el-button type="primary" :icon="MdCodeDownload" plain :title="$t('m.batchGetMetadata')"
-          @click="getBookListMetadata()" :loading="buttonGetMetadatasLoading"></el-button>
-      </el-col>
-      <el-col :span="1">
-        <el-button :icon="ArrowTrendingLines20Filled" plain @click="$refs.TagGraphRef.displayTagGraph()" :title="$t('m.tagAnalysis')"></el-button>
-      </el-col>
-      <el-col :span="1">
+          @click="getBookListMetadata()" :loading="buttonGetMetadatasLoading" v-if="!setting.enableNovel || activeTab === 'manga'"></el-button>
+        <el-button :icon="ArrowTrendingLines20Filled" plain @click="$refs.TagGraphRef.displayTagGraph()" :title="$t('m.tagAnalysis')" v-if="!setting.enableNovel || activeTab === 'manga'"></el-button>
         <el-button :icon="SettingIcon" plain @click="$refs.SettingRef.dialogVisibleSetting = true" :title="$t('m.setting')"></el-button>
-      </el-col>
-      <el-col :span="3">
-        <el-select :placeholder="$t('m.sort_filter')" @change="handleSortChange" clearable v-model="sortValue">
+        <el-select :placeholder="$t('m.sort_filter')" @change="handleSortChange" clearable v-model="sortValue" class="sort-select">
           <el-option-group :label="$t('m.filter')">
             <el-option :label="$t('m.all')" value=""></el-option>
-            <el-option :label="$t('m.bookmarkOnly')" value="mark"></el-option>
-            <el-option :label="$t('m.collectionOnly')" value="collection"></el-option>
-            <el-option :label="$t('m.hiddenOnly')" value="hidden"></el-option>
+            <el-option :label="$t('m.bookmarkOnly')" value="mark" v-if="!setting.enableNovel || activeTab === 'manga'"></el-option>
+            <el-option :label="$t('m.collectionOnly')" value="collection" v-if="!setting.enableNovel || activeTab === 'manga'"></el-option>
+            <el-option :label="$t('m.hiddenOnly')" value="hidden" v-if="!setting.enableNovel || activeTab === 'manga'"></el-option>
             <el-option :label="$t('m.recentReadOnly')" value="recentRead"></el-option>
           </el-option-group>
           <el-option-group :label="$t('m.sort')">
             <el-option :label="$t('m.shuffle')" value="shuffle"></el-option>
             <el-option :label="$t('m.addTimeAscend')" value="addAscend"></el-option>
             <el-option :label="$t('m.addTimeDescend')" value="addDescend"></el-option>
-            <el-option :label="$t('m.mtimeAscend')" value="mtimeAscend"></el-option>
-            <el-option :label="$t('m.mtimeDescend')" value="mtimeDescend"></el-option>
-            <el-option :label="$t('m.postTimeAscend')" value="postAscend"></el-option>
-            <el-option :label="$t('m.postTimeDescend')" value="postDescend"></el-option>
-            <el-option :label="$t('m.ratingAscend')" value="scoreAscend"></el-option>
-            <el-option :label="$t('m.ratingDescend')" value="scoreDescend"></el-option>
+            <el-option :label="$t('m.mtimeAscend')" value="mtimeAscend" v-if="!setting.enableNovel || activeTab === 'manga'"></el-option>
+            <el-option :label="$t('m.mtimeDescend')" value="mtimeDescend" v-if="!setting.enableNovel || activeTab === 'manga'"></el-option>
+            <el-option :label="$t('m.postTimeAscend')" value="postAscend" v-if="!setting.enableNovel || activeTab === 'manga'"></el-option>
+            <el-option :label="$t('m.postTimeDescend')" value="postDescend" v-if="!setting.enableNovel || activeTab === 'manga'"></el-option>
+            <el-option :label="$t('m.ratingAscend')" value="scoreAscend" v-if="!setting.enableNovel || activeTab === 'manga'"></el-option>
+            <el-option :label="$t('m.ratingDescend')" value="scoreDescend" v-if="!setting.enableNovel || activeTab === 'manga'"></el-option>
             <el-option :label="$t('m.readCountAscend')" value="readCountAscend"></el-option>
             <el-option :label="$t('m.readCountDescend')" value="readCountDescend"></el-option>
-            <el-option :label="$t('m.artistAscend')" value="artistAscend"></el-option>
-            <el-option :label="$t('m.artistDescend')" value="artistDescend"></el-option>
+            <el-option :label="$t('m.artistAscend')" value="artistAscend" v-if="!setting.enableNovel || activeTab === 'manga'"></el-option>
+            <el-option :label="$t('m.artistDescend')" value="artistDescend" v-if="!setting.enableNovel || activeTab === 'manga'"></el-option>
             <el-option :label="$t('m.titleAscend')" value="titleAscend"></el-option>
             <el-option :label="$t('m.titleDescend')" value="titleDescend"></el-option>
-            <el-option :label="$t('m.pageAscend')" value="pageAscend"></el-option>
-            <el-option :label="$t('m.pageDescend')" value="pageDescend"></el-option>
+            <el-option :label="$t('m.pageAscend')" value="pageAscend" v-if="!setting.enableNovel || activeTab === 'manga'"></el-option>
+            <el-option :label="$t('m.pageDescend')" value="pageDescend" v-if="!setting.enableNovel || activeTab === 'manga'"></el-option>
           </el-option-group>
         </el-select>
-      </el-col>
-      <el-col :span="4">
-        <el-row :gutter="20">
-          <el-col :span="6"  v-if="!editTagView && !editCollectionView">
-            <el-button plain @click="$refs.EditViewRef.enterEditCollectionView()" :icon="CicsSystemGroup" :title="$t('m.manageCollection')"></el-button>
-          </el-col>
-          <el-col :span="6" v-if="editCollectionView">
-            <el-button type="primary" plain @click="$refs.EditViewRef.addCollection()" :icon="Collections24Regular" :title="$t('m.addCollection')"></el-button>
-          </el-col>
-          <el-col :span="6" v-if="editCollectionView">
-            <el-button type="primary" plain @click="$refs.EditViewRef.editCollection()" :icon="Edit" :title="$t('m.editCollection')"></el-button>
-          </el-col>
-          <el-col :span="6" v-if="editCollectionView">
-            <el-button type="primary" plain @click="$refs.EditViewRef.saveCollection()" :icon="Save16Regular" :title="$t('m.save')"></el-button>
-          </el-col>
-          <el-col :span="6" v-if="editCollectionView">
-            <el-button type="primary" plain @click="$refs.EditViewRef.exitCollectionView()" :icon="MdExit" :title="$t('m.exit')"></el-button>
-          </el-col>
-          <el-col :span="6"  v-if="!editTagView && !editCollectionView">
-            <el-button plain @click="$refs.EditViewRef.enterEditTagView()" :icon="TagGroup" :title="$t('m.manageTag')"></el-button>
-          </el-col>
-          <el-col :span="6" v-if="editTagView">
-            <el-button type="primary" plain @click="$refs.EditViewRef.exitEditTagView()" :icon="MdExit" :title="$t('m.exit')"></el-button>
-          </el-col>
-        </el-row>
-      </el-col>
-      </template>
-      <template v-if="setting.enableNovel && activeTab === 'novel'">
-      <el-col :span="3">
-        <el-button type="primary" @click="$refs.NovelLibraryRef && $refs.NovelLibraryRef.scanNovelLibrary()" :icon="MdRefresh" title="扫描小说库">扫描</el-button>
-      </el-col>
-      <el-col :span="2">
-        <el-button @click="$refs.NovelLibraryRef && $refs.NovelLibraryRef.importNovel()" :icon="Plus" title="导入单本">导入</el-button>
-      </el-col>
-      <el-col :span="1">
-        <el-button :icon="SettingIcon" plain @click="$refs.SettingRef.dialogVisibleSetting = true" :title="$t('m.setting')"></el-button>
-      </el-col>
-      </template>
-    </el-row>
+        <div v-if="!setting.enableNovel || activeTab === 'manga'" class="search-bar-actions">
+          <el-button plain @click="$refs.EditViewRef.enterEditCollectionView()" :icon="CicsSystemGroup" :title="$t('m.manageCollection')" v-if="!editTagView && !editCollectionView"></el-button>
+          <el-button type="primary" plain @click="$refs.EditViewRef.addCollection()" :icon="Collections24Regular" :title="$t('m.addCollection')" v-if="editCollectionView"></el-button>
+          <el-button type="primary" plain @click="$refs.EditViewRef.editCollection()" :icon="Edit" :title="$t('m.editCollection')" v-if="editCollectionView"></el-button>
+          <el-button type="primary" plain @click="$refs.EditViewRef.saveCollection()" :icon="Save16Regular" :title="$t('m.save')" v-if="editCollectionView"></el-button>
+          <el-button type="primary" plain @click="$refs.EditViewRef.exitCollectionView()" :icon="MdExit" :title="$t('m.exit')" v-if="editCollectionView"></el-button>
+          <el-button plain @click="$refs.EditViewRef.enterEditTagView()" :icon="TagGroup" :title="$t('m.manageTag')" v-if="!editTagView && !editCollectionView"></el-button>
+          <el-button type="primary" plain @click="$refs.EditViewRef.exitEditTagView()" :icon="MdExit" :title="$t('m.exit')" v-if="editTagView"></el-button>
+        </div>
+        <div v-if="setting.enableNovel && activeTab === 'novel'" class="search-bar-actions novel-right-actions">
+          <el-button @click="$refs.NovelLibraryRef && $refs.NovelLibraryRef.importNovel()" :icon="Plus" title="导入单本">导入</el-button>
+          <el-button plain @click="$refs.NovelLibraryRef && $refs.NovelLibraryRef.rebuildCache()" :icon="MdRefresh" title="重建缓存">重建</el-button>
+        </div>
+      </div>
+    </div>
+    <!-- 10px 固定背景色条（滚动时保持不动） -->
+    <div class="top-bar-gap"></div>
     <template v-if="!setting.enableNovel || activeTab === 'manga'">
     <RandomTags
       ref="randomTagsRef"
@@ -125,7 +97,7 @@
       @search="handleSearchString"
     />
     <el-row :gutter="20" class="book-card-area">
-      <el-col :span="24" v-if="!editTagView && !editCollectionView" class="book-card-list" :style="{height: setting.disableRandomTag ? 'calc(100vh - 96px)' : 'calc(100vh - 134px)'}">
+      <el-col :span="24" v-if="!editTagView && !editCollectionView" class="book-card-list">
         <div
           v-for="(book, index) in visibleChunkDisplayBookList"
           :key="book.id"
@@ -322,6 +294,7 @@ export default defineComponent({
       moveFileTargetFolder: null,
       // novel tabs
       activeTab: 'manga',
+      novelSearchString: '',
     }
   },
   computed: {
@@ -398,8 +371,8 @@ export default defineComponent({
         console.log('app-cache:request-bookList-snap error:', err)
       }
     })
-    this.sortValue = localStorage.getItem('sortValue')
-    this.sortValue = this.sortValue === 'null' ? undefined : this.sortValue === 'undefined' ? undefined : this.sortValue
+    this.sortValue = localStorage.getItem('sortValue') || 'recentRead'
+    this.sortValue = this.sortValue === 'null' ? 'recentRead' : this.sortValue === 'undefined' ? 'recentRead' : this.sortValue
     window.addEventListener('keydown', this.resolveKey)
     window.addEventListener('wheel', this.resolveWheel)
     window.addEventListener('mousedown', this.resolveMouseDown)
@@ -464,43 +437,47 @@ export default defineComponent({
       if (!!document.querySelector('.is-message-box')) {
         return 'message-box'
       }
-      if (this.$refs.SettingRef.dialogVisibleSetting) {
+      if (this.$refs.SettingRef?.dialogVisibleSetting) {
         return 'setting'
       }
-      if (this.$refs.SearchDialogRef.dialogVisibleEhSearch) {
+      if (this.$refs.SearchDialogRef?.dialogVisibleEhSearch) {
         return 'search-dialog'
       }
-      if (this.$refs.InternalViewerRef.drawerVisibleViewer) {
+      if (this.$refs.InternalViewerRef?.drawerVisibleViewer) {
         if (this.$refs.InternalViewerRef.showThumbnail) {
           return 'viewer-thumbnail'
         } else {
           return 'viewer-content'
         }
       }
-      if (this.$refs.InternalViewerRef.isComicReadDisplay) {
+      if (this.$refs.InternalViewerRef?.isComicReadDisplay) {
         return 'viewer-comicread'
       }
-      if (this.$refs.BookDetailDialogRef.dialogVisibleBookDetail) {
+      if (this.$refs.BookDetailDialogRef?.dialogVisibleBookDetail) {
         if (this.$refs.BookDetailDialogRef.editingTag) {
           return 'edit-tag'
         } else {
           return 'bookdetail'
         }
       }
-      if (this.$refs.TagGraphRef.dialogVisibleGraph) {
+      if (this.$refs.TagGraphRef?.dialogVisibleGraph) {
         return 'tag-graph'
       }
-      if (this.$refs.FolderTreeRef.sideVisibleFolderTree) {
+      if (this.$refs.FolderTreeRef?.sideVisibleFolderTree) {
         return 'folder-tree'
       }
-      if (this.$refs.EditViewRef.editCollectionView) {
+      if (this.$refs.EditViewRef?.editCollectionView) {
         return 'edit-collection'
       }
-      if (this.$refs.EditViewRef.editTagView) {
+      if (this.$refs.EditViewRef?.editTagView) {
         return 'edit-group-tag'
       }
       if (this.drawerVisibleCollection) {
         return 'collection'
+      }
+      // 小说阅读器打开时，阻止书库键盘导航
+      if (document.querySelector('.novel-reader-overlay')) {
+        return 'novel-reader'
       }
       return 'home'
     },
@@ -793,7 +770,56 @@ export default defineComponent({
       this.displayBookList = _.shuffle(this.displayBookList)
       this.chunkList()
     },
+    // 顶栏复用：根据当前模式派发到漫画或小说
+    handleSearchClick () {
+      if (this.setting.enableNovel && this.activeTab === 'novel') {
+        if (this.$refs.NovelLibraryRef && this.$refs.NovelLibraryRef.searchNovel) {
+          this.$refs.NovelLibraryRef.searchNovel(this.novelSearchString)
+        }
+      } else {
+        this.searchBook()
+      }
+    },
+    handleShuffle () {
+      if (this.setting.enableNovel && this.activeTab === 'novel') {
+        if (this.$refs.NovelLibraryRef && this.$refs.NovelLibraryRef.searchNovel) {
+          this.$refs.NovelLibraryRef.shuffleNovel()
+        }
+      } else {
+        this.shuffleBook()
+      }
+    },
+    handleScan () {
+      if (this.setting.enableNovel && this.activeTab === 'novel') {
+        if (this.$refs.NovelLibraryRef && this.$refs.NovelLibraryRef.scanNovelLibrary) {
+          this.$refs.NovelLibraryRef.scanNovelLibrary()
+        }
+      } else {
+        this.loadBookList(true)
+      }
+    },
     handleSortChange (val, bookList) {
+      // 小说模式下派发到小说排序
+      if (this.setting.enableNovel && this.activeTab === 'novel') {
+        if (this.$refs.NovelLibraryRef && this.$refs.NovelLibraryRef.sortNovelList) {
+          // 将漫画排序值映射到小说排序值
+          const novelSortMap = {
+            'recentRead': 'recentRead',
+            'readCountAscend': 'readCount',
+            'readCountDescend': 'readCount',
+            'titleAscend': 'title',
+            'titleDescend': 'title',
+            'addAscend': 'dateAsc',
+            'addDescend': '',
+            'shuffle': 'shuffle'
+          }
+          const novelSortBy = novelSortMap[val] || ''
+          this.$refs.NovelLibraryRef.sortNovelList(novelSortBy)
+        }
+        localStorage.setItem('sortValue', val)
+        return
+      }
+
       if (!bookList) bookList = this.displayBookList
       switch(val){
         case 'mark':
@@ -810,15 +836,22 @@ export default defineComponent({
           break
         case 'recentRead':
           const recentReads =  fetchRecentReads()
-          this.displayBookList = _.uniqBy(
-            recentReads.map(id => this.bookList.find(book => {
+          {
+            const readIds = new Set(recentReads)
+            // 最近阅读过的漫画（按阅读顺序排列）
+            const readBooks = recentReads.map(id => this.bookList.find(book => {
               if (book.collectionHide) return false
               if (book.isCollection) return book.ids.includes(id)
               return book.id === id
-            }))
-            .filter(book => book !== undefined),
-            'id'
-          )
+            })).filter(book => book !== undefined)
+            // 未阅读过的漫画（按添加时间排列）
+            const unreadBooks = this.bookList.filter(book => {
+              if (book.collectionHide) return false
+              if (book.isCollection) return !book.ids.some(id => readIds.has(id))
+              return !readIds.has(book.id)
+            }).toSorted(this.sortList('date')).toReversed()
+            this.displayBookList = _.uniqBy([...readBooks, ...unreadBooks], 'id')
+          }
           this.chunkList()
           break
         case 'shuffle':
@@ -1160,7 +1193,8 @@ export default defineComponent({
       this.scrollMainPageTop()
     },
     scrollMainPageTop () {
-      document.getElementsByClassName('book-card-area')[0].scrollTop = 0
+      const el = document.getElementsByClassName('book-card-area')[0]
+      if (el) el.scrollTop = 0
     },
 
     async getMetadataFromClipboardLink (book) {
@@ -1389,13 +1423,32 @@ export default defineComponent({
 })
 </script>
 <style lang='stylus'>
+/* 隐藏整个 app 窗口的滚动条（右侧 + 底部），只保留内部区域滚动 */
+html, body
+  scrollbar-width: none
+  -ms-overflow-style: none
+  overflow: hidden
+html::-webkit-scrollbar, body::-webkit-scrollbar
+  display: none
+  width: 0
+  height: 0
 body
-  margin: auto
+  margin: 0
   width: calc(100vw - 20px)
 #app
+  height: 100vh
+  overflow: hidden
   font-family: Avenir, Helvetica, Arial, sans-serif
   text-align: center
-  margin-top: 20px
+  padding-top: 20px
+  box-sizing: border-box
+  display: flex
+  flex-direction: column
+
+.top-bar-gap
+  height: 10px
+  flex-shrink: 0
+  background: var(--el-bg-color)
 
 @keyframes striped-flow
   0%
@@ -1438,14 +1491,63 @@ body
   opacity: 1
   background-color: #ffffff66
 
-.search-input,
-.function-button
+.book-search-bar
+  display: flex
+  align-items: center
+  gap: 4px
+  padding: 4px 8px
+  flex-wrap: nowrap
+  white-space: nowrap
+  overflow-x: auto
+  overflow-y: hidden
+  scrollbar-width: none
+  -ms-overflow-style: none
+  &::-webkit-scrollbar
+    display: none
+    width: 0
+    height: 0
+
+.search-bar-left
+  display: flex
+  align-items: center
+  gap: 4px
+  flex-shrink: 0
+
+.search-bar-center
+  flex: 1
+  min-width: 40px
+
+.search-bar-right
+  display: flex
+  align-items: center
+  gap: 4px
+  flex-shrink: 1
+  flex-wrap: nowrap
+
+.search-bar-actions
+  display: flex
+  align-items: center
+  gap: 2px
+  flex-shrink: 1
+
+.search-input
   width: 100%
+  .el-input__wrapper
+    padding: 2px 8px
+
+.sort-select
+  min-width: 60px
+  max-width: 120px
+  .el-select__wrapper
+    padding: 2px 8px
+
+.top-bar-gap
+  height: 6px
+
 .autocomplete-value
   margin-left: 2em
   float: right
 
-// search-input sort-select
 .el-autocomplete-suggestion__wrap, .el-select-dropdown__wrap
   max-height: 490px!important
 
@@ -1462,15 +1564,24 @@ body
       text-align: center
 
 .book-card-area
-  overflow-x: auto
+  flex: 1
+  overflow-x: hidden
+  overflow-y: hidden
   justify-content: center
-  margin-top: 8px
+  margin-top: 4px
   .book-card-list
-    height: calc(100vh - 96px)
+    height: 100%
     display: flex
     flex-wrap: wrap
     justify-content: center
     align-content: flex-start
+    overflow-y: auto
+    scrollbar-width: none
+    -ms-overflow-style: none
+    &::-webkit-scrollbar
+      display: none
+      width: 0
+      height: 0
 
 .book-card-frame
   min-width: 234px
