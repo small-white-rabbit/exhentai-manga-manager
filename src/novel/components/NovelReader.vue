@@ -1143,6 +1143,9 @@ const handleKeyboard = (e) => {
   color: inherit;
   border-radius: 2px;
   padding: 0 1px;
+  display: inline;
+  line-height: 1;
+  vertical-align: baseline;
 }
 .chapter-content,
 .chapter-list {
