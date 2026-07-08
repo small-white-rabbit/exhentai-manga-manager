@@ -59,7 +59,7 @@
           <div>加载失败：{{ store.loadError }}</div>
           <el-button @click="retryLoad" size="small" style="margin-top: 12px;">重试</el-button>
         </div>
-        <div v-else-if="settings.colorize" class="reader-text" :style="textStyle">
+        <div v-else-if="fontReady && settings.colorize" class="reader-text" :style="textStyle">
           <div
             v-for="(p, i) in renderedParagraphs"
             :key="i"
@@ -68,7 +68,7 @@
           ></div>
           <div v-if="isRendering" class="reader-loading-more">正在加载更多内容…</div>
         </div>
-        <div v-else class="reader-text" :style="textStyle">
+        <div v-else-if="fontReady" class="reader-text" :style="textStyle">
           <div v-for="(p, i) in renderedParagraphs" :key="i" class="reader-paragraph">{{ p }}</div>
           <div v-if="isRendering" class="reader-loading-more">正在加载更多内容…</div>
         </div>
@@ -142,11 +142,13 @@ const activeChapterIdx = ref(store.currentChapterIndex)
 const isJumping = ref(false)
 const isRestoring = ref(false)
 const isReady = ref(false)
+const fontReady = ref(false)
 let initChapterLock = false
 
 let saveTimer = null
 let lastScrollTop = 0
 let scrollDirection = 0 // 1=down, -1=up
+let chapterUpdateTimer = null // 节流章节更新
 
 // ColorTxt 风格：程序性滚动计数器
 let programmaticScrollDepth = 0
@@ -182,10 +184,14 @@ const physicalLineToDisplayLine = (physicalLine) => {
   if (cached != null && cached >= 1) return cached
   const map = store.displayLineToPhysicalLine
   if (!map || map.length === 0) return p
-  for (let i = 0; i < map.length; i++) {
-    if (map[i] >= p) return i + 1
+  // 二分查找：map 单调不减，找首个 map[i] >= p 的位置
+  let lo = 0, hi = map.length
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    if (map[mid] < p) lo = mid + 1
+    else hi = mid
   }
-  return map.length
+  return lo < map.length ? lo + 1 : map.length
 }
 
 /** 获取文本偏移处字符的包围矩形（DOM 坐标） */
@@ -240,7 +246,10 @@ const captureViewportAnchor = () => {
     const textBefore = preRange.toString()
     preRange.detach()
 
-    const displayLine = Math.max(1, textBefore.split('\n').length)
+    // 数换行符代替 split('\n').length，避免创建巨大临时数组
+    let nlCount = 0
+    for (let ci = 0; ci < textBefore.length; ci++) { if (textBefore.charCodeAt(ci) === 10) nlCount++ }
+    const displayLine = Math.max(1, nlCount + 1)
     physicalLine = displayLineToPhysicalLine(displayLine)
 
     // 计算在当前展示行内的 wrap 行索引
@@ -609,7 +618,10 @@ const updateActiveChapter = () => {
       preRange.selectNodeContents(textEl)
       preRange.setEnd(node, offset)
       const textBefore = preRange.toString()
-      const displayLine = Math.max(1, textBefore.split('\n').length)
+      // 数换行符代替 split，避免大文本下创建巨大临时数组
+      let nlCount = 0
+      for (let ci = 0; ci < textBefore.length; ci++) { if (textBefore.charCodeAt(ci) === 10) nlCount++ }
+      const displayLine = Math.max(1, nlCount + 1)
       physicalLine = displayLineToPhysicalLine(displayLine)
       preRange.detach()
     }
@@ -655,7 +667,10 @@ const onScroll = () => {
   lastScrollTop = st
   if (store.readingProgressSynced) {
     scheduleSave()
-    updateActiveChapter()
+    // 节流章节更新：200ms 内最多执行一次
+    if (!chapterUpdateTimer) {
+      chapterUpdateTimer = setTimeout(() => { chapterUpdateTimer = null; updateActiveChapter() }, 200)
+    }
   }
 }
 
@@ -730,6 +745,31 @@ const stickyStyle = computed(() => ({
   color: themeColors.value.title,
   borderBottomColor: 'rgba(128,128,128,0.2)'
 }))
+
+const fontFileMap = {
+  'JingHuaLaoSongTi': { url: '/fonts/JingHuaLaoSongTi.ttf', format: 'truetype' }
+  // 以下字体文件暂未放入 public/fonts/，待添加后取消注释
+  // 'LXGWWenKai': { url: '/fonts/LXGWWenKai.woff2', format: 'woff2' },
+  // 'LangManYaYuan': { url: '/fonts/LangManYaYuan.woff2', format: 'woff2' }
+}
+
+const preloadReaderFont = async () => {
+  const fontFamily = settings.value.fontFamily || DEFAULT_SETTINGS.fontFamily
+  const fontInfo = fontFileMap[fontFamily]
+  if (!fontInfo) {
+    // 非内置字体（导入字体或系统字体），无需预加载
+    fontReady.value = true
+    return
+  }
+  try {
+    const face = new FontFace(fontFamily, `url(${fontInfo.url})`, { display: 'block' })
+    await face.load()
+    document.fonts.add(face)
+  } catch (e) {
+    console.warn('Font preload failed:', fontFamily, e)
+  }
+  fontReady.value = true
+}
 
 const fontStack = computed(() => {
   const f = settings.value.fontFamily
@@ -813,8 +853,14 @@ const flushPersistSettings = () => persistSettings()
 
 const onSettingsChange = async (newSettings) => {
   const anchor = captureViewportAnchor()
+  const oldFontFamily = settings.value.fontFamily
   settings.value = { ...settings.value, ...newSettings }
   emit('update-settings', newSettings)
+  // 字体变更时重新预加载
+  if (newSettings.fontFamily && newSettings.fontFamily !== oldFontFamily) {
+    fontReady.value = false
+    await preloadReaderFont()
+  }
   store.rebuildDisplayText({
     collapseBlank: settings.value.collapseBlank,
     leadIndentFullWidth: settings.value.indent > 0
@@ -881,6 +927,8 @@ onMounted(async () => {
       emit('update-settings', { ...latestSetting.novel })
     }
   } catch (e) { console.warn('NovelReader: 加载最新设置失败', e) }
+  // 预加载字体，完成后再显示内容，避免字体闪烁
+  await preloadReaderFont()
   isReady.value = true
   if (store.physicalLines.length > 0 && store.currentNovel && !store.readingProgressSynced) {
     store.rebuildDisplayText({
@@ -907,6 +955,7 @@ onBeforeUnmount(() => {
   flushSave()
   flushPersistSettings()
   clearRenderRaf()
+  if (chapterUpdateTimer) { clearTimeout(chapterUpdateTimer); chapterUpdateTimer = null }
   isRestoring.value = false
   isJumping.value = false
   isReady.value = false
@@ -1074,14 +1123,14 @@ const handleKeyboard = (e) => {
 .reader-text {
   margin: 0;
   text-align: left;
-  content-visibility: auto;
-  contain-intrinsic-size: auto 500px;
 }
 .reader-paragraph {
   white-space: pre-wrap;
   word-break: break-word;
   margin: 0 0 0.8em 0;
   text-indent: inherit;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 4em;
 }
 .reader-loading-more {
   text-align: center;

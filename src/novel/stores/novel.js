@@ -176,6 +176,15 @@ export const useNovelStore = defineStore('novel', {
       this.loading = true
       this.loadError = ''
       try {
+        // 尝试流式加载（大文件更快）
+        if (window.ipcRenderer && typeof window.ipcRenderer.invoke === 'function') {
+          try {
+            await this.loadFullTextStreaming()
+            return
+          } catch (streamErr) {
+            console.warn('Streaming load failed, falling back to full read:', streamErr)
+          }
+        }
         const { buffer, encoding } = await window.ipcRenderer.invoke('novel:read-full-text', this.currentNovel.id)
         const { text, physicalLines } = decodeAndSplitBuffer(buffer, encoding || 'utf-8')
         this.fullText = text || ''
@@ -189,6 +198,43 @@ export const useNovelStore = defineStore('novel', {
         throw e
       } finally {
         this.loading = false
+      }
+    },
+    async loadFullTextStreaming() {
+      if (!this.currentNovel) return
+      const { streamId, totalBytes } = await window.ipcRenderer.invoke('novel:stream-text-start', this.currentNovel.id)
+      const textChunks = []
+      let processedBytes = 0
+      let chunkCount = 0
+      try {
+        while (true) {
+          const result = await window.ipcRenderer.invoke('novel:stream-text-chunk', streamId)
+          if (result.done) break
+          textChunks.push(result.text)
+          processedBytes = result.bytesRead
+          chunkCount++
+          // 更新进度
+          if (totalBytes > 0) {
+            this.importProgress = {
+              phase: 'loading',
+              current: processedBytes,
+              total: totalBytes,
+              message: `正在加载... ${Math.round(processedBytes / totalBytes * 100)}%`
+            }
+          }
+          // 每 3 个块让出一次 UI，避免卡顿
+          if (chunkCount % 3 === 0) {
+            await Promise.resolve()
+          }
+        }
+        // 用数组 join 代替反复字符串拼接，减少中间对象
+        const totalText = textChunks.join('')
+        const normalized = totalText.replace(LINE_BREAK_RE, '\n')
+        const lines = normalized.length > 0 ? normalized.split('\n') : []
+        this.fullText = totalText || ''
+        this.physicalLines = lines || []
+      } finally {
+        await window.ipcRenderer.invoke('novel:stream-text-end', streamId).catch(() => {})
       }
     },
     async rebuildDisplayText(options = {}) {

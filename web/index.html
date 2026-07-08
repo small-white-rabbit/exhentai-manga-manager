@@ -2507,9 +2507,9 @@
         $('reader-title').textContent = extractBookTitle(book.title)
 
         const query = new URLSearchParams({ _t: Date.now().toString() })
-        const data = await fetchJSON(`/api/archives/${encodeURIComponent(book.arcid)}/metadata?${query.toString()}`)
+        const data = await fetchJSON(`/api/archives/${encodeURIComponent(book.arcid)}/files?${query.toString()}`)
         const pages = data.pages || []
-        currentPages = pages.map(p => `/api/archives/${encodeURIComponent(book.arcid)}/page/${p}`)
+        currentPages = pages
 
         $('page-slider').max = currentPages.length
         $('page-slider').value = 1

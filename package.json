@@ -26,6 +26,7 @@
     "files": [
       "dist/index.html",
       "dist/assets/*",
+      "dist/fonts/*",
       "dist/monacoeditorwork/**/*",
       "dist/icon.png",
       "fileLoader/*",
@@ -35,6 +36,7 @@
       "public/fonts/*",
       "modules/*",
       "src/services/appCache.js",
+      "src/novel/utils/chapter-detector.js",
       "index.js",
       "preload.js"
     ],

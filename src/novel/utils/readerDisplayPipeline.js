@@ -158,152 +158,22 @@ export async function formatPhysicalLinesForReader(physicalLines, options, onPro
     currentChapterIdx--
   }
   
+  // 直接从 out 数组计算文本和章节偏移，避免 join+split 创建巨大中间字符串
   const text = out.join('\n')
-  const lines = text.split('\n')
   let offset = 0
-  
   for (let i = 0; i < chapters.length; i++) {
     const ch = chapters[i]
     ch.startOffset = offset
-    for (let j = ch.lineNumber - 1; j < lines.length; j++) {
-      offset += lines[j].length + 1
-      if (i < chapters.length - 1 && j + 1 === chapters[i + 1].lineNumber) {
-        break
-      }
+    // 从当前章节起始行累加到下一章起始行（或数组末尾）
+    const nextLineNum = i < chapters.length - 1 ? chapters[i + 1].lineNumber : outIdx
+    for (let j = ch.lineNumber - 1; j < nextLineNum && j < outIdx; j++) {
+      offset += out[j].length + 1 // +1 for '\n'
     }
     ch.endOffset = offset
   }
   
   if (onProgress) {
     onProgress(total, total)
-  }
-  
-  return {
-    text,
-    displayLineToPhysicalLine: displayLineToPhysical,
-    lineCount: outIdx,
-    chapterTitleDisplayLineByPhysical,
-    chapters
-  }
-}
-
-export function formatPhysicalLinesForReaderSync(physicalLines, options) {
-  const compressBlankLines = options.compressBlankLines ?? false
-  const compressBlankKeepOneBlank = options.compressBlankKeepOneBlank ?? false
-  const leadIndentFullWidth = options.leadIndentFullWidth ?? false
-  const minCharCount = options.minCharCount ?? 0
-  
-  const total = physicalLines.length
-  const out = new Array(total * 2)
-  const displayLineToPhysical = new Array(total * 2)
-  const chapterTitleDisplayLineByPhysical = new Map()
-  const chapters = []
-  
-  let outIdx = 0
-  let physicalLine = 0
-  let currentChapterIdx = -1
-  let lastWasChapterTitle = false
-  let lastWasBlank = true
-  
-  for (let i = 0; i < total; i++) {
-    const rawLine = physicalLines[i]
-    physicalLine++
-    const lineLen = rawLine.length
-    
-    const isBlankLine = lineLen === 0 || isBlankFast(rawLine, lineLen)
-    
-    if (isBlankLine) {
-      if (!compressBlankLines && !lastWasBlank) {
-        out[outIdx] = ''
-        displayLineToPhysical[outIdx] = physicalLine
-        outIdx++
-        lastWasBlank = true
-      }
-      continue
-    }
-    
-    lastWasBlank = false
-    
-    const title = detectChapterTitle(rawLine)
-    
-    if (title) {
-      if (currentChapterIdx >= 0 && chapters[currentChapterIdx].charCount < minCharCount) {
-        chapters.pop()
-        currentChapterIdx--
-      }
-      
-      if (outIdx > 0 && !lastWasChapterTitle) {
-        out[outIdx] = ''
-        displayLineToPhysical[outIdx] = physicalLine
-        outIdx++
-      }
-      
-      out[outIdx] = title
-      displayLineToPhysical[outIdx] = physicalLine
-      const displayLine = outIdx + 1
-      chapterTitleDisplayLineByPhysical.set(physicalLine, displayLine)
-      outIdx++
-      
-      chapters.push({
-        title,
-        lineNumber: displayLine,
-        charCount: 0,
-        startOffset: null,
-        endOffset: null
-      })
-      currentChapterIdx = chapters.length - 1
-      
-      out[outIdx] = ''
-      displayLineToPhysical[outIdx] = physicalLine
-      outIdx++
-      lastWasChapterTitle = true
-      continue
-    }
-    
-    let shown = rawLine
-    if (leadIndentFullWidth) {
-      shown = applyLeadIndentFullWidth(rawLine)
-    }
-    
-    out[outIdx] = shown
-    displayLineToPhysical[outIdx] = physicalLine
-    outIdx++
-    
-    if (currentChapterIdx >= 0) {
-      chapters[currentChapterIdx].charCount += shown.length
-    }
-    
-    if (compressBlankKeepOneBlank) {
-      out[outIdx] = ''
-      displayLineToPhysical[outIdx] = physicalLine
-      outIdx++
-    }
-    
-    lastWasChapterTitle = false
-  }
-  
-  out.length = outIdx
-  displayLineToPhysical.length = outIdx
-  
-  if (currentChapterIdx >= 0 && chapters[currentChapterIdx].charCount < minCharCount) {
-    chapters.pop()
-    currentChapterIdx--
-  }
-  
-  const text = out.join('\n')
-  const lines = text.split('\n')
-  let offset = 0
-  
-  for (let i = 0; i < chapters.length; i++) {
-    const ch = chapters[i]
-    ch.startOffset = offset
-    for (let j = ch.lineNumber - 1; j < lines.length; j++) {
-      offset += lines[j].length + 1
-      if (i < chapters.length - 1 && j + 1 === chapters[i + 1].lineNumber) {
-        break
-      }
-    }
-    ch.endOffset = offset
   }
   
   return {

@@ -1,7 +1,7 @@
 <template>
   <div class="novel-card" @click="$emit('open', novel)">
     <div class="novel-cover">
-      <img v-if="novel.coverPath" :src="coverUrl" :alt="novel.title" />
+      <img v-if="novel.coverPath && !coverFailed" :src="coverUrl" :alt="novel.title" @error="coverFailed = true" />
       <div v-else class="novel-cover-placeholder">
         <el-icon :size="40"><BookRound /></el-icon>
       </div>
@@ -19,7 +19,7 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { ref, computed } from 'vue'
 import { BookRound } from '@vicons/material'
 
 const props = defineProps({
@@ -28,10 +28,11 @@ const props = defineProps({
 
 defineEmits(['open'])
 
+const coverFailed = ref(false)
+
 const coverUrl = computed(() => {
   if (!props.novel.coverPath) return ''
-  // coverPath 是本地绝对路径，通过 file:// 协议加载
-  return 'file:///' + props.novel.coverPath.replace(/\\/g, '/')
+  return props.novel.coverPath
 })
 </script>
 

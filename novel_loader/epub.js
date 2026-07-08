@@ -332,4 +332,29 @@ const parseEpub = async (filepath, onProgress) => {
   }
 }
 
-module.exports = { parseEpub }
+module.exports = { parseEpub, readEpubCover }
+
+/** 仅提取 epub 封面 buffer，不解析章节（用于封面丢失时快速恢复） */
+function readEpubCover(filepath) {
+  let zip = null
+  try {
+    zip = new AdmZip(filepath)
+    const entryMap = zipEntriesByLowerPath(zip)
+    const containerEntry = getEntry(entryMap, 'META-INF/container.xml')
+    if (!containerEntry) return null
+    const containerDoc = parseXml(containerEntry.getData().toString('utf8'))
+    const rootFile = getElements(containerDoc, 'rootfile')[0]
+    const opfPath = getAttr(rootFile, 'full-path').replace(/^\/+/, '')
+    if (!opfPath) return null
+    const opfEntry = getEntry(entryMap, opfPath)
+    if (!opfEntry) return null
+    const opfDoc = parseXml(opfEntry.getData().toString('utf8'))
+    const opfDir = path.posix.dirname(opfPath) === '.' ? '' : path.posix.dirname(opfPath)
+    const manifest = parseManifest(opfDoc)
+    return findCoverBuffer(entryMap, opfDoc, opfDir, manifest)
+  } catch (e) {
+    return null
+  } finally {
+    zip = null
+  }
+}

@@ -42,6 +42,7 @@ const {
 const { findSameFile } = require('./fileLoader/folder.js')
 const { makeShardedPath } = require('./fileLoader/utils.js')
 const { importNovel, readTxtChapter, readEpubChapter, readFullText } = require('./novel_loader/index')
+const { detectEncoding, decodeBuffer } = require('./novel_loader/txt')
 const { DEFAULT_RULES: CHAPTER_RULES } = require('./src/novel/utils/chapter-detector')
 const { scanNovelFiles } = require('./novel_loader/filelist')
 const { synthesizeEdgeTtsMp3, EDGE_TTS_ZH_VOICES } = require('./novel_loader/edgeTts')
@@ -3147,6 +3148,22 @@ if (setting.enableNovel) {
               }
             }
           }
+          // 检测封面文件丢失，尝试从 epub 重新提取
+          if (existing.coverPath && !fs.existsSync(existing.coverPath)) {
+            if (item.type === 'epub') {
+              try {
+                const { readEpubCover } = require('./novel_loader/epub')
+                const coverBuffer = await readEpubCover(item.filepath)
+                if (coverBuffer) {
+                  const sharp = require('sharp')
+                  await sharp(coverBuffer).resize(500, 707, { fit: 'contain', background: '#303133' }).toFile(existing.coverPath)
+                  sendMessageToWebContents(`已重新生成封面: ${existing.title}`)
+                }
+              } catch (e) {
+                console.warn(`[novel] 重新提取封面失败: ${existing.title}`, e.message)
+              }
+            }
+          }
           if (existing.status === 'missing') {
             await Novel.update({ exist: true, status: 'non-tag' }, { where: { id: existing.id } })
           } else {
@@ -3402,6 +3419,40 @@ if (setting.enableNovel) {
     const chapters = await NovelChapter.findAll({ where: { novelId }, order: [['index', 'ASC']], raw: true })
     // 主进程解码后重新编码为 UTF-8 ArrayBuffer，渲染进程直接用 TextDecoder('utf-8') 解码即可
     return { buffer: buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength), encoding, chapters }
+  })
+
+  // 流式读取：启动流（检测编码，打开文件）
+  const novelTextStreams = new Map()
+  ipcMain.handle('novel:stream-text-start', async (_event, novelId) => {
+    const novel = await Novel.findByPk(novelId)
+    if (!novel) throw new Error('Novel not found')
+    const novelCacheDir = path.join(STORE_PATH, 'novel_cache')
+    const { buffer, encoding } = await readFullText(novel, novelCacheDir)
+    const streamId = Date.now().toString()
+    novelTextStreams.set(streamId, { buffer, encoding, position: 0 })
+    return { streamId, encoding, totalBytes: buffer.length }
+  })
+
+  // 流式读取：拉取下一个文本块（renderer 驱动，避免竞态）
+  ipcMain.handle('novel:stream-text-chunk', async (_event, streamId, chunkSize = 256 * 1024) => {
+    const stream = novelTextStreams.get(streamId)
+    if (!stream) return { done: true, text: '' }
+    const { buffer, encoding } = stream
+    if (stream.position >= buffer.length) {
+      novelTextStreams.delete(streamId)
+      return { done: true, text: '' }
+    }
+    const end = Math.min(stream.position + chunkSize, buffer.length)
+    const slice = buffer.slice(stream.position, end)
+    const text = decodeBuffer(slice, encoding)
+    stream.position = end
+    return { done: false, text, bytesRead: end, totalBytes: buffer.length }
+  })
+
+  // 流式读取：结束并清理
+  ipcMain.handle('novel:stream-text-end', async (_event, streamId) => {
+    novelTextStreams.delete(streamId)
+    return true
   })
 
   ipcMain.handle('novel:read-chapter', async (event, novelId, chapterIdx) => {

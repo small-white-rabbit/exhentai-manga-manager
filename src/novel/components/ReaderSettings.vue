@@ -205,14 +205,10 @@ watch(() => props.modelValue, (isOpen) => {
   }
 })
 
-// 兜底：只要 local 因用户操作发生变化，就通知父组件
-watch(local, () => {
-  if (isInitializing.value) return
-  emit('change', { ...local.value })
-}, { deep: true })
-
 // 统一变更通知：所有控件都调用此函数把当前完整设置 emit 给父组件
+// 注意：不再用 watch(local, deep) 兑底，否则每次变更会触发两次 change
 const handleChange = () => {
+  if (isInitializing.value) return
   emit('change', { ...local.value })
 }
 const handleClose = () => {
