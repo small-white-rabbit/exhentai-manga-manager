@@ -2,7 +2,7 @@
   <el-drawer v-model="visible" title="阅读设置" direction="rtl" size="360px" @closed="handleClose" class="reader-settings-drawer">
     <el-form label-position="top" size="small">
       <el-form-item label="字体来源">
-        <el-radio-group v-model="local.fontSource" @change="handleChange">
+        <el-radio-group v-model="local.fontSource" @change="handleFontSourceChange">
           <el-radio-button label="builtin">内置</el-radio-button>
           <el-radio-button label="import">导入</el-radio-button>
           <el-radio-button label="system">系统</el-radio-button>
@@ -10,22 +10,20 @@
       </el-form-item>
 
       <el-form-item label="字体" v-if="local.fontSource === 'builtin'">
-        <el-select v-model="local.fontFamily" @change="handleChange" style="width:100%">
-          <el-option label="京華老宋体" value="JingHuaLaoSongTi" />
-          <el-option label="霞鹜文楷" value="LXGWWenKai" />
-          <el-option label="浪漫雅圆" value="LangManYaYuan" />
+        <el-select v-model="local.fontFamily" @change="handleChange" style="width:100%" popper-class="reader-font-select-dropdown">
+          <el-option v-for="f in BUILTIN_FONTS" :key="f.value" :label="f.label" :value="f.value" />
         </el-select>
       </el-form-item>
 
       <el-form-item label="字体" v-if="local.fontSource === 'import'">
-        <el-select v-model="local.fontFamily" @change="handleChange" style="width:100%">
+        <el-select v-model="local.fontFamily" @change="handleChange" style="width:100%" popper-class="reader-font-select-dropdown">
           <el-option v-for="f in importedFonts" :key="f" :label="f" :value="f" />
         </el-select>
         <el-button size="small" @click="$emit('import-font')" style="margin-top:8px">+ 导入字体</el-button>
       </el-form-item>
 
       <el-form-item label="字体" v-if="local.fontSource === 'system'">
-        <el-select v-model="local.fontFamily" @change="handleChange" style="width:100%" filterable>
+        <el-select v-model="local.fontFamily" @change="handleChange" style="width:100%" filterable popper-class="reader-font-select-dropdown">
           <el-option v-for="f in systemFonts" :key="f" :label="f" :value="f" />
         </el-select>
       </el-form-item>
@@ -168,6 +166,7 @@
 
 <script setup>
 import { ref, watch, nextTick, onMounted } from 'vue'
+import { BUILTIN_FONTS } from '../utils/readerFonts'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -211,6 +210,15 @@ const handleChange = () => {
   if (isInitializing.value) return
   emit('change', { ...local.value })
 }
+const handleFontSourceChange = (source) => {
+  const availableFonts = source === 'builtin'
+    ? BUILTIN_FONTS.map(font => font.value)
+    : source === 'import' ? props.importedFonts : props.systemFonts
+  if (!availableFonts.includes(local.value.fontFamily)) {
+    local.value.fontFamily = availableFonts[0] || ''
+  }
+  handleChange()
+}
 const handleClose = () => {
   emit('close')
 }
@@ -249,9 +257,11 @@ onMounted(async () => {
 .reader-settings-drawer .el-select .el-select__placeholder {
   color: #a8abb2;
 }
+.reader-font-select-dropdown,
 .tts-voice-select-dropdown {
   z-index: 9999 !important;
 }
+.reader-font-select-dropdown .el-select-dropdown__item,
 .tts-voice-select-dropdown .el-select-dropdown__item {
   color: #303133;
 }

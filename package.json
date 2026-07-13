@@ -31,7 +31,7 @@
       "dist/icon.png",
       "fileLoader/*",
       "novel_loader/*",
-      "web/*",
+      "web/**/*",
       "public/*",
       "public/fonts/*",
       "modules/*",

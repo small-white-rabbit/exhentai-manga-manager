@@ -84,6 +84,7 @@
 
 <script setup>
 import { ref, onMounted, watch, onUnmounted, nextTick, computed, toRaw } from 'vue'
+import { loadReaderFont } from '../utils/readerFonts'
 import { useNovelStore } from '../stores/novel'
 import { parseVoiceSegments, splitTTSChunks, hasSpeakableText } from '../utils/voiceSegments'
 import { colorize, escapeHtml } from '../utils/colorizer'
@@ -926,6 +927,11 @@ const flushPersistSettings = () => persistSettings()
 const onSettingsChange = async (newSettings) => {
   settings.value = { ...settings.value, ...newSettings }
   emit('update-settings', newSettings)
+  try {
+    await loadReaderFont(settings.value.fontFamily, settings.value.fontSource)
+  } catch (e) {
+    console.warn('Font preload failed:', settings.value.fontFamily, e)
+  }
   store.rebuildDisplayText({
     collapseBlank: settings.value.collapseBlank,
     leadIndentFullWidth: settings.value.indent > 0
@@ -935,7 +941,11 @@ const onSettingsChange = async (newSettings) => {
 
 const importFont = async () => {
   const result = await window.ipcRenderer.invoke('novel:import-font-dialog')
-  if (result) importedFonts.value = await window.ipcRenderer.invoke('novel:imported-fonts')
+  if (result) {
+    importedFonts.value = await window.ipcRenderer.invoke('novel:imported-fonts')
+    const fontFamily = String(result).split(/[\\/]/).pop().replace(/\.(ttf|otf|woff2?)$/i, '')
+    await onSettingsChange({ fontSource: 'import', fontFamily })
+  }
 }
 
 watch(() => store.currentChapterIndex, (newIdx) => {
@@ -1023,6 +1033,11 @@ onMounted(async () => {
     }
   } catch (e) { console.warn('NovelReader: 加载最新设置失败', e) }
   
+  try {
+    await loadReaderFont(settings.value.fontFamily, settings.value.fontSource)
+  } catch (e) {
+    console.warn('Font preload failed:', settings.value.fontFamily, e)
+  }
   await nextTick()
   
   if (store.physicalLines.length > 0 && store.currentNovel) {

@@ -11,12 +11,12 @@
   font-display: swap;
 }
 @font-face {
-  font-family: 'LXGWWenKai';
-  src: url('./LXGWWenKai.woff2') format('woff2');
+  font-family: 'Langmanyayuan';
+  src: url('./Langmanyayuan.ttf') format('truetype');
   font-display: swap;
 }
 @font-face {
-  font-family: 'LangManYaYuan';
-  src: url('./LangManYaYuan.woff2') format('woff2');
+  font-family: 'ZuZiBwan';
+  src: url('./ZuZiBwan.ttf') format('truetype');
   font-display: swap;
 }

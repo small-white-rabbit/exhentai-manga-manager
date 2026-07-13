@@ -2,10 +2,32 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#1a1a1a">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="漫画阅读器">
   <title>exhentai-manga-manager Web Reader</title>
   <link rel="icon" href="/icon.ico" type="image/x-icon">
+  <link rel="manifest" href="/pwa/manifest.webmanifest?v=2">
+  <link rel="apple-touch-icon" href="/pwa/apple-touch-icon.png">
   <style>
+    @font-face {
+      font-family: 'JingHuaLaoSongTi';
+      src: url('/fonts/JingHuaLaoSongTi.ttf') format('truetype');
+      font-display: swap;
+    }
+    @font-face {
+      font-family: 'Langmanyayuan';
+      src: url('/fonts/Langmanyayuan.ttf') format('truetype');
+      font-display: swap;
+    }
+    @font-face {
+      font-family: 'ZuZiBwan';
+      src: url('/fonts/ZuZiBwan.ttf') format('truetype');
+      font-display: swap;
+    }
     * { box-sizing: border-box; }
     html, body {
       margin: 0;
@@ -18,7 +40,18 @@
       overflow: hidden;
     }
 
-    #app { width: 100%; height: 100%; }
+    #app {
+      width: 100%;
+      height: 100%;
+      height: 100dvh;
+      min-height: 100%;
+      min-height: 100dvh;
+      padding-top: env(safe-area-inset-top);
+      padding-right: env(safe-area-inset-right);
+      padding-bottom: env(safe-area-inset-bottom);
+      padding-left: env(safe-area-inset-left);
+      background: #1a1a1a;
+    }
 
     .view {
       width: 100%;
@@ -216,11 +249,13 @@
       backdrop-filter: blur(4px);
     }
 
-    #reader-top-bar {
+    #reader-top-bar,
+    #novel-top-bar {
       top: 0;
       transition: transform 0.25s ease;
     }
-    #reader-top-bar.scrolled-down { transform: translateY(-100%); }
+    #reader-top-bar.scrolled-down,
+    #novel-top-bar.scrolled-down { transform: translateY(-100%); }
     #reader-bottom-bar { bottom: 0; }
 
     .reader-bar button, .reader-bar select {
@@ -542,22 +577,24 @@
       width: 48px;
       height: 48px;
       border-radius: 50%;
-      background: rgba(30, 30, 30, 0.6);
-      backdrop-filter: blur(8px);
-      border: 1px solid rgba(255,255,255,0.08);
+      background: transparent;
+      backdrop-filter: none;
+      border: 0;
       display: flex;
       align-items: center;
       justify-content: center;
       cursor: grab;
       z-index: 30;
-      box-shadow: 0 2px 12px rgba(0,0,0,0.2);
-      transition: background 0.3s ease, box-shadow 0.3s ease, transform 0.15s ease;
+      box-shadow: none;
+      opacity: 0.78;
+      transition: opacity 0.5s ease, transform 0.15s ease;
       user-select: none;
       touch-action: none;
     }
     .tts-fab:hover {
-      background: rgba(30, 30, 30, 0.85);
-      box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+      background: transparent;
+      box-shadow: none;
+      opacity: 1;
     }
     .tts-fab:active {
       cursor: grabbing;
@@ -574,6 +611,7 @@
       border-color: transparent;
       box-shadow: none;
       backdrop-filter: none;
+      opacity: 1;
     }
     .tts-fab.playing .tts-fab-icon {
       color: #f59e0b;
@@ -604,9 +642,17 @@
       animation-delay: 1s;
     }
     .tts-fab.playing:hover {
-      background: rgba(30, 30, 30, 0.6);
-      border-color: rgba(245, 158, 11, 0.2);
-      backdrop-filter: blur(8px);
+      background: transparent;
+      border-color: transparent;
+      backdrop-filter: none;
+    }
+    .tts-fab.is-idle,
+    .tts-fab.playing.is-idle {
+      opacity: 0.14;
+    }
+    .tts-fab.is-idle:hover,
+    .tts-fab.is-idle:focus-visible {
+      opacity: 1;
     }
     @keyframes tts-fab-pulse {
       0%, 100% { transform: scale(1); filter: drop-shadow(0 0 6px rgba(245, 158, 11, 0.5)); }
@@ -671,6 +717,7 @@
         </select>
         <button id="search-btn">搜索</button>
         <button id="refresh-btn">刷新</button>
+        <button class="fullscreen-btn" type="button">全屏</button>
       </div>
       <div id="book-list" class="book-grid"></div>
       <div id="library-status" class="loading">正在加载书库...</div>
@@ -684,6 +731,7 @@
           <option value="waterfall">瀑布流</option>
           <option value="page">翻页</option>
         </select>
+        <button class="fullscreen-btn" type="button">全屏</button>
       </div>
       <div id="reader-image">
         <img id="page-img" src="" alt="page" />
@@ -707,6 +755,7 @@
         <button id="novel-back-btn">返回</button>
         <button id="novel-chapter-btn">目录</button>
         <h2 id="novel-title" class="reader-title"></h2>
+        <button class="fullscreen-btn" type="button">全屏</button>
         <button id="novel-settings-btn">设置</button>
       </div>
       <div id="novel-chapter-list"></div>
@@ -731,6 +780,9 @@
         <div class="settings-section">
           <label>字体</label>
           <div class="font-samples" id="font-samples">
+            <div class="font-sample" data-font="JingHuaLaoSongTi" style="font-family:JingHuaLaoSongTi">京華老宋体</div>
+            <div class="font-sample" data-font="Langmanyayuan" style="font-family:Langmanyayuan">浪漫雅圆</div>
+            <div class="font-sample" data-font="ZuZiBwan" style="font-family:ZuZiBwan">筑紫 B 丸</div>
             <div class="font-sample" data-font="sans-serif" style="font-family:sans-serif">默认字体</div>
             <div class="font-sample" data-font="'宋体', SimSun, serif" style="font-family:'宋体',SimSun,serif">宋体</div>
             <div class="font-sample" data-font="'黑体', SimHei, sans-serif" style="font-family:'黑体',SimHei,sans-serif">黑体</div>
@@ -879,6 +931,7 @@
     let ttsSegments = []
     let ttsCurrentSegIdx = 0
     let ttsCurrentParagraphEl = null
+    let ttsPlaybackGeneration = 0
     const ttsAudioCache = new Map()
     const ttsPreloadControllers = new Set()
     const TTS_PRELOAD_COUNT = 3
@@ -1153,6 +1206,10 @@
             i++
             buffer += text[i]
           }
+          while (i + 1 < text.length && '”’」』》】）)'.indexOf(text[i + 1]) !== -1) {
+            i++
+            buffer += text[i]
+          }
           result.push({ isSentence: true, sentenceIdx, text: buffer })
           buffer = ''
           sentenceIdx++
@@ -1178,6 +1235,8 @@
         renderedChapterRange = { start: -1, end: -1 }
         isLoadingChapter = false
         $('novel-title').textContent = extractBookTitle(novel.title)
+        lastNovelScrollTop = 0
+        $('novel-top-bar').classList.remove('scrolled-down')
         $('library-view').classList.add('hidden')
         $('novel-reader-view').classList.remove('hidden')
         $('novel-chapters-container').innerHTML =
@@ -1281,6 +1340,7 @@
     }
 
     let novelScrollBound = false
+    let lastNovelScrollTop = 0
     function setupNovelScroll() {
       if (novelScrollBound) return
       novelScrollBound = true
@@ -1290,12 +1350,24 @@
       contentEl.addEventListener('scroll', () => {
         if (!ticking) {
           requestAnimationFrame(() => {
+            const scrollTop = contentEl.scrollTop
+            const scrollDelta = scrollTop - lastNovelScrollTop
+            const topBar = $('novel-top-bar')
+            if (scrollTop <= 60 || scrollDelta < -2) {
+              topBar.classList.remove('scrolled-down')
+            } else if (scrollDelta > 2) {
+              topBar.classList.add('scrolled-down')
+            }
+            lastNovelScrollTop = Math.max(0, scrollTop)
             handleNovelScroll()
             ticking = false
           })
           ticking = true
         }
       }, { passive: true })
+
+      contentEl.addEventListener('pointerdown', wakeTTSFab, { passive: true })
+      contentEl.addEventListener('wheel', wakeTTSFab, { passive: true })
 
       contentEl.addEventListener('click', (e) => {
         if (e.target.closest('#novel-chapters-container')) {
@@ -1336,6 +1408,7 @@
         }
       }
 
+      stopTTS()
       ttsSegments = buildAllSegmentsForRange()
       ttsCurrentSegIdx = Math.min(globalSegIdx, ttsSegments.length - 1)
       if (ttsCurrentSegIdx < 0) ttsCurrentSegIdx = 0
@@ -1514,6 +1587,7 @@
       }
       stopTTS()
       $('novel-reader-view').classList.add('hidden')
+      $('novel-top-bar').classList.remove('scrolled-down')
       $('library-view').classList.remove('hidden')
       $('novel-settings-panel').classList.remove('open')
       $('novel-settings-overlay').classList.remove('open')
@@ -1663,165 +1737,96 @@
 
     function buildTTSSegments(paragraphs) {
       const segments = []
-      const dialogueRegex = /[\""「『]([^\""」』]+)[\""」』]/g
-      const SHORT_PARA_LEN = 200
+      const dialogueRegex = /["“「『]([^"”」』]+)["”」』]/g
+      const SMALL_PARAGRAPH_LENGTH = 220
+      const MAX_CHUNK_LENGTH = 180
+      let globalIdx = 0
 
-      function hasMeaningfulText(text) {
-        const trimmed = text.trim()
-        if (!trimmed) return false
-        return /[\u4e00-\u9fa5a-zA-Z0-9]/.test(trimmed)
-      }
-
-      function addSegment(text, type, paraIdx, globalIdx) {
+      function addSegment(text, type, paraIdx, sentenceIndices) {
         const trimmed = text.trim()
         if (!hasMeaningfulText(trimmed)) return null
-        return { text: trimmed, type, paraIdx, globalIdx }
+        const indices = [...new Set(sentenceIndices)].sort((a, b) => a - b)
+        const segment = {
+          text: trimmed,
+          type,
+          paraIdx,
+          sentenceIdx: indices[0],
+          sentenceIndices: indices,
+          globalIdx
+        }
+        globalIdx++
+        segments.push(segment)
+        return segment
       }
 
-      function splitBySentences(text, type, paraIdx, startGlobalIdx) {
-        const result = []
-        const sentenceEndChars = '。！？!?…'
-        let buffer = ''
-        let globalIdx = startGlobalIdx
-        let i = 0
+      function addBatchedSegments(items, paraIdx) {
+        let pendingText = ''
+        let pendingType = ''
+        let pendingIndices = []
 
-        while (i < text.length) {
-          const ch = text[i]
-          buffer += ch
-
-          if (sentenceEndChars.indexOf(ch) !== -1) {
-            const seg = addSegment(buffer, type, paraIdx, globalIdx)
-            if (seg) {
-              result.push(seg)
-              globalIdx++
-            }
-            buffer = ''
-          }
-          i++
+        const flush = () => {
+          if (pendingText) addSegment(pendingText, pendingType, paraIdx, pendingIndices)
+          pendingText = ''
+          pendingType = ''
+          pendingIndices = []
         }
 
-        if (buffer.trim()) {
-          const seg = addSegment(buffer, type, paraIdx, globalIdx)
-          if (seg) result.push(seg)
+        for (const item of items) {
+          const separator = pendingText && !/[\s\n]$/.test(pendingText) ? ' ' : ''
+          const nextLength = pendingText.length + separator.length + item.text.length
+          if (pendingText && (item.type !== pendingType || nextLength > MAX_CHUNK_LENGTH)) flush()
+          if (!pendingText) pendingType = item.type
+          pendingText += (pendingText ? separator : '') + item.text
+          pendingIndices.push(item.sentenceIdx)
         }
-
-        return result
+        flush()
       }
-
-      let globalIdx = 0
 
       for (let paraIdx = 0; paraIdx < paragraphs.length; paraIdx++) {
         const para = paragraphs[paraIdx]
         if (!para || !para.trim()) continue
 
-        const cleanPara = para.replace(/\n+/g, ' ').trim()
-        if (!hasMeaningfulText(cleanPara)) continue
+        const sentencePieces = splitSentencesPreserveNewlines(para).filter(piece => piece.isSentence)
+        const sentences = sentencePieces
+          .map(piece => ({ text: piece.text.replace(/\n+/g, ' ').trim(), sentenceIdx: piece.sentenceIdx }))
+          .filter(piece => hasMeaningfulText(piece.text))
+        if (sentences.length === 0) continue
 
         if (ttsMode === 'single') {
-          if (cleanPara.length <= SHORT_PARA_LEN) {
-            const seg = addSegment(cleanPara, 'narrator', paraIdx, globalIdx)
-            if (seg) {
-              segments.push(seg)
-              globalIdx++
-            }
+          const paragraphText = sentences.map(sentence => sentence.text).join(' ')
+          if (paragraphText.length <= SMALL_PARAGRAPH_LENGTH) {
+            addSegment(paragraphText, 'narrator', paraIdx, sentences.map(sentence => sentence.sentenceIdx))
           } else {
-            const segs = splitBySentences(cleanPara, 'narrator', paraIdx, globalIdx)
-            if (segs.length > 0) {
-              globalIdx += segs.length
-              segments.push(...segs)
-            } else {
-              const seg = addSegment(cleanPara, 'narrator', paraIdx, globalIdx)
-              if (seg) {
-                segments.push(seg)
-                globalIdx++
-              }
-            }
+            addBatchedSegments(sentences.map(sentence => ({ ...sentence, type: 'narrator' })), paraIdx)
           }
-        } else {
+          continue
+        }
+
+        const voiceItems = []
+        for (const piece of sentences) {
+          const sentence = piece.text
+
           let lastIndex = 0
           let match
           let hasDialogue = false
-          const matches = []
-
           dialogueRegex.lastIndex = 0
-          while ((match = dialogueRegex.exec(cleanPara)) !== null) {
+
+          while ((match = dialogueRegex.exec(sentence)) !== null) {
             hasDialogue = true
-            matches.push(match)
+            if (match.index > lastIndex) {
+              voiceItems.push({ text: sentence.substring(lastIndex, match.index), type: 'narrator', sentenceIdx: piece.sentenceIdx })
+            }
+            voiceItems.push({ text: match[0], type: 'dialogue', sentenceIdx: piece.sentenceIdx })
+            lastIndex = match.index + match[0].length
           }
 
           if (!hasDialogue) {
-            if (cleanPara.length <= SHORT_PARA_LEN) {
-              const seg = addSegment(cleanPara, 'narrator', paraIdx, globalIdx)
-              if (seg) {
-                segments.push(seg)
-                globalIdx++
-              }
-            } else {
-              const segs = splitBySentences(cleanPara, 'narrator', paraIdx, globalIdx)
-              if (segs.length > 0) {
-                globalIdx += segs.length
-                segments.push(...segs)
-              } else {
-                const seg = addSegment(cleanPara, 'narrator', paraIdx, globalIdx)
-                if (seg) {
-                  segments.push(seg)
-                  globalIdx++
-                }
-              }
-            }
-          } else {
-            for (const m of matches) {
-              if (m.index > lastIndex) {
-                const beforeText = cleanPara.substring(lastIndex, m.index).trim()
-                if (beforeText && hasMeaningfulText(beforeText)) {
-                  if (beforeText.length <= SHORT_PARA_LEN) {
-                    const seg = addSegment(beforeText, 'narrator', paraIdx, globalIdx)
-                    if (seg) {
-                      segments.push(seg)
-                      globalIdx++
-                    }
-                  } else {
-                    const segs = splitBySentences(beforeText, 'narrator', paraIdx, globalIdx)
-                    if (segs.length > 0) {
-                      globalIdx += segs.length
-                      segments.push(...segs)
-                    }
-                  }
-                }
-              }
-
-              const dialogueText = m[0]
-              if (dialogueText && hasMeaningfulText(dialogueText)) {
-                const seg = addSegment(dialogueText, 'dialogue', paraIdx, globalIdx)
-                if (seg) {
-                  segments.push(seg)
-                  globalIdx++
-                }
-              }
-
-              lastIndex = m.index + m[0].length
-            }
-
-            if (lastIndex < cleanPara.length) {
-              const afterText = cleanPara.substring(lastIndex).trim()
-              if (afterText && hasMeaningfulText(afterText)) {
-                if (afterText.length <= SHORT_PARA_LEN) {
-                  const seg = addSegment(afterText, 'narrator', paraIdx, globalIdx)
-                  if (seg) {
-                    segments.push(seg)
-                    globalIdx++
-                  }
-                } else {
-                  const segs = splitBySentences(afterText, 'narrator', paraIdx, globalIdx)
-                  if (segs.length > 0) {
-                    globalIdx += segs.length
-                    segments.push(...segs)
-                  }
-                }
-              }
-            }
+            voiceItems.push({ text: sentence, type: 'narrator', sentenceIdx: piece.sentenceIdx })
+          } else if (lastIndex < sentence.length) {
+            voiceItems.push({ text: sentence.substring(lastIndex), type: 'narrator', sentenceIdx: piece.sentenceIdx })
           }
         }
+        addBatchedSegments(voiceItems.filter(item => hasMeaningfulText(item.text)), paraIdx)
       }
       return segments
     }
@@ -2005,12 +2010,19 @@
       return null
     }
 
-    function highlightCurrentSegment() {
+    function clearTTSHighlight() {
       if (ttsCurrentParagraphEl) {
         ttsCurrentParagraphEl.classList.remove('tts-highlight')
         const prevSentence = ttsCurrentParagraphEl.querySelector('.tts-sentence.tts-highlight-sentence')
         if (prevSentence) prevSentence.classList.remove('tts-highlight-sentence')
       }
+      document.querySelectorAll('.tts-highlight-sentence').forEach(el => el.classList.remove('tts-highlight-sentence'))
+      document.querySelectorAll('#novel-content p.tts-highlight').forEach(el => el.classList.remove('tts-highlight'))
+      ttsCurrentParagraphEl = null
+    }
+
+    function highlightCurrentSegment() {
+      clearTTSHighlight()
 
       if (!ttsPlaying || ttsCurrentSegIdx >= ttsSegments.length) return
 
@@ -2031,20 +2043,26 @@
             scrollTop: $('novel-content').scrollTop
           })
         }
-        pEl.classList.add('tts-highlight')
         ttsCurrentParagraphEl = pEl
 
-        let sentenceEl = null
-        if (seg.sentenceIdx != null) {
-          sentenceEl = pEl.querySelector(`.tts-sentence[data-sentence-idx="${seg.sentenceIdx}"]`)
+        let sentenceEls = []
+        const sentenceIndices = Array.isArray(seg.sentenceIndices)
+          ? seg.sentenceIndices
+          : seg.sentenceIdx != null ? [seg.sentenceIdx] : []
+        for (const sentenceIdx of sentenceIndices) {
+          const el = pEl.querySelector(`.tts-sentence[data-sentence-idx="${sentenceIdx}"]`)
+          if (el) sentenceEls.push(el)
         }
 
-        if (!sentenceEl) {
-          sentenceEl = findSentenceByText(pEl, seg.text)
+        if (sentenceEls.length === 0) {
+          const matchedSentence = findSentenceByText(pEl, seg.text)
+          if (matchedSentence) sentenceEls = [matchedSentence]
         }
 
-        if (sentenceEl) {
-          sentenceEl.classList.add('tts-highlight-sentence')
+        if (sentenceEls.length > 0) {
+          sentenceEls.forEach(el => el.classList.add('tts-highlight-sentence'))
+        } else {
+          pEl.classList.add('tts-highlight')
         }
 
         const contentEl = $('novel-content')
@@ -2053,9 +2071,10 @@
         const bottomBarHeight = 0
 
         const contentRect = contentEl.getBoundingClientRect()
-        const elRect = sentenceEl ? sentenceEl.getBoundingClientRect() : pEl.getBoundingClientRect()
-        const elTopRelative = elRect.top - contentRect.top + contentEl.scrollTop
-        const elBottomRelative = elRect.bottom - contentRect.top + contentEl.scrollTop
+        const firstRect = sentenceEls.length > 0 ? sentenceEls[0].getBoundingClientRect() : pEl.getBoundingClientRect()
+        const lastRect = sentenceEls.length > 0 ? sentenceEls[sentenceEls.length - 1].getBoundingClientRect() : firstRect
+        const elTopRelative = firstRect.top - contentRect.top + contentEl.scrollTop
+        const elBottomRelative = lastRect.bottom - contentRect.top + contentEl.scrollTop
 
         const viewTop = contentEl.scrollTop + topBarHeight
         const viewBottom = viewTop + contentEl.clientHeight - topBarHeight - bottomBarHeight
@@ -2079,6 +2098,7 @@
     }
 
     function playTTS() {
+      wakeTTSFab()
       if (ttsPlaying && !ttsPaused) {
         pauseTTS()
         return
@@ -2132,6 +2152,7 @@
 
       ttsPlaying = true
       ttsPaused = false
+      ttsPlaybackGeneration++
       $('novel-tts-fab').classList.add('playing')
 
       startPlayback()
@@ -2242,17 +2263,6 @@
       if (!ttsAudio) {
         ttsAudio = new Audio()
         ttsAudio.playbackRate = ttsRate
-        ttsAudio.onended = () => {
-          if (!ttsPlaying) return
-          ttsCurrentSegIdx++
-          playCurrentEdgeSegment()
-        }
-        ttsAudio.onerror = (e) => {
-          console.warn('Audio playback error:', e)
-          if (!ttsPlaying) return
-          ttsCurrentSegIdx++
-          playCurrentEdgeSegment()
-        }
       }
       preloadAhead()
       playCurrentEdgeSegment()
@@ -2272,14 +2282,30 @@
         return
       }
       const seg = ttsSegments[ttsCurrentSegIdx]
-      highlightCurrentSegment()
-      updateTTSStatus()
+      const segmentIndex = ttsCurrentSegIdx
+      const generation = ttsPlaybackGeneration
       preloadAhead()
       try {
-        const audioUrl = await getAudioUrlForSegment(ttsCurrentSegIdx)
+        const audioUrl = await getAudioUrlForSegment(segmentIndex)
+        if (!ttsPlaying || ttsPaused || generation !== ttsPlaybackGeneration || segmentIndex !== ttsCurrentSegIdx) return
         const prevSrc = ttsAudio.src
+        ttsAudio.onended = null
+        ttsAudio.onerror = null
         ttsAudio.src = audioUrl
         ttsAudio.playbackRate = ttsRate
+        ttsAudio.onended = () => {
+          if (!ttsPlaying || generation !== ttsPlaybackGeneration || segmentIndex !== ttsCurrentSegIdx) return
+          clearTTSHighlight()
+          ttsCurrentSegIdx = segmentIndex + 1
+          playCurrentEdgeSegment()
+        }
+        ttsAudio.onerror = (event) => {
+          console.warn('Audio playback error:', event)
+          if (!ttsPlaying || generation !== ttsPlaybackGeneration || segmentIndex !== ttsCurrentSegIdx) return
+          clearTTSHighlight()
+          ttsCurrentSegIdx = segmentIndex + 1
+          playCurrentEdgeSegment()
+        }
         if (prevSrc && prevSrc.startsWith('blob:')) {
           const prevCacheKey = getCacheKey(ttsCurrentSegIdx - 1)
           if (!prevCacheKey || !ttsAudioCache.has(prevCacheKey)) {
@@ -2288,7 +2314,11 @@
         }
         cleanupOldCache()
         await ttsAudio.play()
+        if (!ttsPlaying || ttsPaused || generation !== ttsPlaybackGeneration || segmentIndex !== ttsCurrentSegIdx) return
+        highlightCurrentSegment()
+        updateTTSStatus()
       } catch (e) {
+        if (generation !== ttsPlaybackGeneration || segmentIndex !== ttsCurrentSegIdx) return
         console.error('Edge TTS play error:', e)
         if (e.name === 'AbortError') {
           if (!ttsPlaying) return
@@ -2307,29 +2337,37 @@
       if (!ttsPlaying || ttsPaused) return
       if (ttsCurrentSegIdx >= ttsSegments.length) { stopTTS(); return }
       const seg = ttsSegments[ttsCurrentSegIdx]
-      highlightCurrentSegment()
-      updateTTSStatus()
+      const segmentIndex = ttsCurrentSegIdx
+      const generation = ttsPlaybackGeneration
       const text = seg.text
       const voiceId = getVoiceForSegment(seg)
       if ('speechSynthesis' in window) {
         speechSynthesis.cancel()
-        ttsUtterance = new SpeechSynthesisUtterance(text)
-        ttsUtterance.rate = ttsRate
+        const utterance = new SpeechSynthesisUtterance(text)
+        ttsUtterance = utterance
+        utterance.rate = ttsRate
         const sysVoices = speechSynthesis.getVoices()
         const voice = sysVoices.find(v => v.voiceURI === voiceId || v.name === voiceId || v.voiceURI === ttsVoice || v.name === ttsVoice)
-        if (voice) { try { ttsUtterance.voice = voice } catch (e) { console.warn('Failed to set voice:', e) } }
-        ttsUtterance.onend = () => {
-          if (!ttsPlaying) return
-          ttsCurrentSegIdx++
+        if (voice) { try { utterance.voice = voice } catch (e) { console.warn('Failed to set voice:', e) } }
+        utterance.onstart = () => {
+          if (!ttsPlaying || generation !== ttsPlaybackGeneration || ttsUtterance !== utterance || segmentIndex !== ttsCurrentSegIdx) return
+          highlightCurrentSegment()
+          updateTTSStatus()
+        }
+        utterance.onend = () => {
+          if (!ttsPlaying || generation !== ttsPlaybackGeneration || ttsUtterance !== utterance || segmentIndex !== ttsCurrentSegIdx) return
+          clearTTSHighlight()
+          ttsCurrentSegIdx = segmentIndex + 1
           speakNextSegmentSystem()
         }
-        ttsUtterance.onerror = (e) => {
+        utterance.onerror = (e) => {
           console.warn('TTS error:', e)
-          if (!ttsPlaying) return
-          ttsCurrentSegIdx++
+          if (!ttsPlaying || generation !== ttsPlaybackGeneration || ttsUtterance !== utterance || segmentIndex !== ttsCurrentSegIdx) return
+          clearTTSHighlight()
+          ttsCurrentSegIdx = segmentIndex + 1
           speakNextSegmentSystem()
         }
-        speechSynthesis.speak(ttsUtterance)
+        speechSynthesis.speak(utterance)
       }
     }
 
@@ -2348,6 +2386,7 @@
     }
 
     function stopTTS() {
+      ttsPlaybackGeneration++
       ttsPlaying = false
       ttsPaused = false
       ttsCurrentSegIdx = 0
@@ -2373,20 +2412,16 @@
         speechSynthesis.cancel()
       }
 
-      if (ttsCurrentParagraphEl) {
-        ttsCurrentParagraphEl.classList.remove('tts-highlight')
-        const prevSentence = ttsCurrentParagraphEl.querySelector('.tts-sentence.tts-highlight-sentence')
-        if (prevSentence) prevSentence.classList.remove('tts-highlight-sentence')
-        ttsCurrentParagraphEl = null
-      }
+      clearTTSHighlight()
       ttsUtterance = null
     }
 
     function prevTTSSegment() {
       if (ttsCurrentSegIdx > 0) {
         const wasPlaying = ttsPlaying
+        const currentIdx = ttsCurrentSegIdx
         stopTTS()
-        ttsCurrentSegIdx = Math.max(0, ttsCurrentSegIdx - 1)
+        ttsCurrentSegIdx = Math.max(0, currentIdx - 1)
         ttsSegments = buildAllSegmentsForRange()
         if (wasPlaying) {
           ttsPlaying = true
@@ -2420,12 +2455,30 @@
     let ttsFabStartLeft = 0
     let ttsFabStartTop = 0
     let ttsFabMoved = false
+    let ttsFabIdleTimer = null
+
+    function wakeTTSFab() {
+      const fab = $('novel-tts-fab')
+      if (!fab) return
+      fab.classList.remove('is-idle')
+      if (ttsFabIdleTimer) clearTimeout(ttsFabIdleTimer)
+      ttsFabIdleTimer = setTimeout(() => {
+        if (ttsFabDragging) {
+          wakeTTSFab()
+          return
+        }
+        fab.classList.add('is-idle')
+        ttsFabIdleTimer = null
+      }, 10000)
+    }
 
     function setupTTSFabDrag() {
       const fab = $('novel-tts-fab')
       if (!fab) return
 
       let dragStarted = false
+
+      fab.addEventListener('pointerdown', wakeTTSFab, { passive: true })
 
       fab.addEventListener('mousedown', (e) => {
         if (e.button !== 0) return
@@ -2486,6 +2539,7 @@
 
       fab.addEventListener('click', (e) => {
         if (ttsFabMoved) return
+        wakeTTSFab()
         playTTS()
       })
 
@@ -2494,6 +2548,7 @@
         fab.style.right = 'auto'
         fab.style.left = '20px'
       }
+      wakeTTSFab()
     }
 
     async function openBook(book) {
@@ -2824,6 +2879,48 @@
     })
 
     setupTTSFabDrag()
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true
+    const fullscreenElement = () => document.fullscreenElement || document.webkitFullscreenElement
+    const syncFullscreenButtons = () => {
+      const label = fullscreenElement() || isStandalone ? '退出全屏' : '全屏'
+      document.querySelectorAll('.fullscreen-btn').forEach(button => {
+        button.textContent = label
+        button.classList.toggle('hidden', isStandalone)
+      })
+    }
+    const toggleFullscreen = async () => {
+      try {
+        if (fullscreenElement()) {
+          const exit = document.exitFullscreen || document.webkitExitFullscreen
+          if (exit) await exit.call(document)
+          return
+        }
+        const root = document.documentElement
+        const enter = root.requestFullscreen || root.webkitRequestFullscreen
+        if (enter) {
+          await enter.call(root)
+        } else {
+          alert('当前浏览器不支持网页全屏，请将本页添加到主屏幕后打开。')
+        }
+      } catch (error) {
+        console.warn('Fullscreen request failed', error)
+      }
+    }
+    document.querySelectorAll('.fullscreen-btn').forEach(button => {
+      button.addEventListener('click', toggleFullscreen)
+    })
+    document.addEventListener('fullscreenchange', syncFullscreenButtons)
+    document.addEventListener('webkitfullscreenchange', syncFullscreenButtons)
+    syncFullscreenButtons()
+
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/service-worker.js', { scope: '/' }).catch(error => {
+          console.warn('Service worker registration failed', error)
+        })
+      })
+    }
+
     if ('speechSynthesis' in window) {
       speechSynthesis.onvoiceschanged = () => {
         if (currentNovel) {

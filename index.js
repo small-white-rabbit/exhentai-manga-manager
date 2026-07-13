@@ -1608,9 +1608,9 @@ ipcMain.handle('save-setting', (_e, receiveSetting) => saveSettingExclusive(rece
 // ====================   app cache    ====================
 ipcMain.handle('app-cache:load-verify-cache', async (_e, opts = {}) => {
   try {
+    if (!require('fs').existsSync(APP_CACHE_PATH)) return { ok: false, appCache: null }
     return await LoadVerifyCache(APP_CACHE_PATH, Manga.sequelize, Metadata.sequelize)
   } catch (e) {
-    console.log('LoadVerifyCache failed:', e)
     return { ok: false, appCache: null }
   }
 })
@@ -2334,6 +2334,14 @@ const WEB_READER_HTML = fs.existsSync(WEB_READER_HTML_PATH)
 </html>
 `
 const LANBrowsing = express()
+LANBrowsing.use('/fonts', express.static(path.join(__dirname, 'public', 'fonts')))
+LANBrowsing.use('/pwa', express.static(path.join(__dirname, 'web', 'pwa')))
+LANBrowsing.get('/service-worker.js', (req, res) => {
+  res.setHeader('Content-Type', 'application/javascript; charset=utf-8')
+  res.setHeader('Service-Worker-Allowed', '/')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.sendFile(path.join(__dirname, 'web', 'service-worker.js'))
+})
 LANBrowsing.use(express.json({ limit: '10mb' }))
 const port = 23786
 const sortkey_map = {
@@ -3530,6 +3538,16 @@ if (setting.enableNovel) {
     } catch {
       return []
     }
+  })
+
+  ipcMain.handle('novel:imported-font-data', async (event, fontName) => {
+    if (typeof fontName !== 'string' || !fontName) return null
+    const files = await fs.promises.readdir(NOVEL_FONT_PATH)
+    const file = files.find(f =>
+      /\.(ttf|otf|woff2?)$/i.test(f) && path.parse(f).name === fontName
+    )
+    if (!file) return null
+    return fs.promises.readFile(path.join(NOVEL_FONT_PATH, file))
   })
 
   ipcMain.handle('novel:import-font-dialog', async (event) => {

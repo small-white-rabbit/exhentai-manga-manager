@@ -89,6 +89,7 @@
 
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick, toRaw } from 'vue'
+import { loadReaderFont } from '../utils/readerFonts'
 import { ArrowLeft, Setting, ArrowUp, ArrowDown, VideoPlay, VideoPause, Fold, Expand } from '@element-plus/icons-vue'
 import { useNovelStore } from '../stores/novel'
 import { colorize } from '../utils/colorizer'
@@ -746,25 +747,10 @@ const stickyStyle = computed(() => ({
   borderBottomColor: 'rgba(128,128,128,0.2)'
 }))
 
-const fontFileMap = {
-  'JingHuaLaoSongTi': { url: '/fonts/JingHuaLaoSongTi.ttf', format: 'truetype' }
-  // 以下字体文件暂未放入 public/fonts/，待添加后取消注释
-  // 'LXGWWenKai': { url: '/fonts/LXGWWenKai.woff2', format: 'woff2' },
-  // 'LangManYaYuan': { url: '/fonts/LangManYaYuan.woff2', format: 'woff2' }
-}
-
 const preloadReaderFont = async () => {
   const fontFamily = settings.value.fontFamily || DEFAULT_SETTINGS.fontFamily
-  const fontInfo = fontFileMap[fontFamily]
-  if (!fontInfo) {
-    // 非内置字体（导入字体或系统字体），无需预加载
-    fontReady.value = true
-    return
-  }
   try {
-    const face = new FontFace(fontFamily, `url(${fontInfo.url})`, { display: 'block' })
-    await face.load()
-    document.fonts.add(face)
+    await loadReaderFont(fontFamily, settings.value.fontSource)
   } catch (e) {
     console.warn('Font preload failed:', fontFamily, e)
   }
@@ -854,10 +840,12 @@ const flushPersistSettings = () => persistSettings()
 const onSettingsChange = async (newSettings) => {
   const anchor = captureViewportAnchor()
   const oldFontFamily = settings.value.fontFamily
+  const oldFontSource = settings.value.fontSource
   settings.value = { ...settings.value, ...newSettings }
   emit('update-settings', newSettings)
   // 字体变更时重新预加载
-  if (newSettings.fontFamily && newSettings.fontFamily !== oldFontFamily) {
+  if ((newSettings.fontFamily && newSettings.fontFamily !== oldFontFamily) ||
+      (newSettings.fontSource && newSettings.fontSource !== oldFontSource)) {
     fontReady.value = false
     await preloadReaderFont()
   }
@@ -874,7 +862,11 @@ const onSettingsChange = async (newSettings) => {
 
 const importFont = async () => {
   const result = await window.ipcRenderer.invoke('novel:import-font-dialog')
-  if (result) importedFonts.value = await window.ipcRenderer.invoke('novel:imported-fonts')
+  if (result) {
+    importedFonts.value = await window.ipcRenderer.invoke('novel:imported-fonts')
+    const fontFamily = String(result).split(/[\\/]/).pop().replace(/\.(ttf|otf|woff2?)$/i, '')
+    await onSettingsChange({ fontSource: 'import', fontFamily })
+  }
 }
 
 const restoreProgress = async () => {
