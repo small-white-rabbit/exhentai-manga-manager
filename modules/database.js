@@ -51,14 +51,6 @@ const prepareMangaModel = (databasePath) => {
     exist: {
       type: DataTypes.BOOLEAN,
       defaultValue: true
-    },
-    readProgress: {
-      type: DataTypes.TEXT,
-      defaultValue: null
-    },
-    lastReadAt: {
-      type: DataTypes.INTEGER,
-      defaultValue: null
     }
   }, {
     indexes: [{ name: 'manga_hash_index', unique: false, fields: ['hash'] }],

@@ -2623,44 +2623,53 @@ LANBrowsing.get('/api/archives/:hash/thumbnail', async (req, res) => {
   }
 })
 
+// 缓存当前打开的漫画信息（用于 web reader 按需加载）
 let existBook = {
   hash: null,
-  imageList: []
+  manga: null,
+  imageList: [], // fast listing 结果（folder 类型有 absolutePath，archive 类型有 archivePath/innerPath）
+  extractedCache: new Map() // page index -> 已解压的文件路径
 }
 
-// 处理章节列表请求
+// 处理章节列表请求 —— 只列出文件名，不解压
 LANBrowsing.get('/api/archives/:hash/files', async (req, res) => {
   try {
     const mangaHash = req.params.hash
-
-    // 从数据库找到对应的漫画
-    const manga = await Manga.findOne({where: {hash: mangaHash}})
+    const manga = await Manga.findOne({ where: { hash: mangaHash } })
 
     if (!manga) {
       return res.status(404).send('Manga not found')
     }
 
-    await clearFolder(VIEWER_PATH)
-    await clearFolder(staticFilePath)
-    const imageList = await getImageListByBook(manga.filepath, manga.type)
+    // 打开新书时清理旧的解压缓存文件夹（只清 VIEWER_PATH，不动 staticFilePath 里可能正在用的）
+    if (existBook.hash !== mangaHash) {
+      try { await clearFolder(VIEWER_PATH) } catch {}
+    }
+
+    // 用 Fast 版本：folder 类型直接 glob，archive 类型只调 7z list（不解压）
+    const imageList = await getImageListByBookFast(manga.filepath, manga.type)
 
     existBook = {
       hash: manga.hash,
-      imageList: imageList.map(p => p.absolutePath)
+      manga: { filepath: manga.filepath, type: manga.type },
+      imageList,
+      extractedCache: new Map()
     }
+
     // 构造响应数据
     const responseFiles = {
-      job: Date.now(), // 示例中的 job 可以是一个随机数或时间戳
-      pages: imageList.map((file, index) => `/api/archives/${manga.hash}/page?path=${index + 1}`)
+      job: Date.now(),
+      pages: imageList.map((_file, index) => `/api/archives/${manga.hash}/page?path=${index + 1}`)
     }
 
     res.json(responseFiles)
   } catch (error) {
+    console.error('[LAN] files error:', error)
     res.status(500).send(error.message)
   }
 })
 
-// 处理章节图片请求
+// 处理单张图片请求 —— folder 直接发、archive 按需解压
 LANBrowsing.get('/api/archives/:hash/page', async (req, res) => {
   const hash = req.params.hash
   const page = parseInt(req.query.path, 10)
@@ -2668,43 +2677,76 @@ LANBrowsing.get('/api/archives/:hash/page', async (req, res) => {
     return res.status(400).send('Invalid page number')
   }
 
-  const manga = await Manga.findOne({where: {hash: hash}})
-  if (!manga || !manga.filepath) {
-    return res.status(404).send('File not found')
-  }
-
-  // 获取章节图片列表
   try {
-    let imageList
-    if (manga.hash === existBook.hash) {
-      imageList = existBook.imageList
-    } else {
-      await clearFolder(VIEWER_PATH)
-      await clearFolder(staticFilePath)
-      imageList = await getImageListByBook(manga.filepath, manga.type)
-      imageList = imageList.map(p => p.absolutePath)
-      existBook.hash = manga.hash
-      existBook.imageList = imageList
+    // 如果缓存 miss，先重建列表（极少见：files 请求和 page 请求 hash 不一致）
+    if (existBook.hash !== hash || existBook.imageList.length === 0) {
+      const manga = await Manga.findOne({ where: { hash } })
+      if (!manga || !manga.filepath) {
+        return res.status(404).send('File not found')
+      }
+      const imageList = await getImageListByBookFast(manga.filepath, manga.type)
+      existBook = {
+        hash: manga.hash,
+        manga: { filepath: manga.filepath, type: manga.type },
+        imageList,
+        extractedCache: new Map()
+      }
     }
-    const imageFilePath = imageList[page - 1]
-    if (!imageFilePath) {
+
+    const item = existBook.imageList[page - 1]
+    if (!item) {
       return res.status(404).send('Image not found')
     }
 
-    // 重命名并复制图片文件到静态文件夹
-    const imageFileName = `${manga.hash}_${page}${path.extname(imageFilePath)}`
-    const imageFile = path.join(staticFilePath, imageFileName)
-    await fs.promises.copyFile(imageFilePath, imageFile)
+    let imageFilePath
+    const extname = path.extname(item.innerPath || item.relativePath || item.absolutePath || '')
 
-    // 发送图片文件
-    if (fs.existsSync(imageFile)) {
-      res.sendFile(imageFile)
+    if (existBook.manga.type === 'folder') {
+      // folder 类型：直接用 absolutePath，不需要解压
+      imageFilePath = item.absolutePath
+      if (!imageFilePath || !fs.existsSync(imageFilePath)) {
+        return res.status(404).send('Image file not found on disk')
+      }
     } else {
-      res.status(404).send('Image file not found')
+      // archive / zip 类型：按需解压单张
+      if (existBook.extractedCache.has(page)) {
+        imageFilePath = existBook.extractedCache.get(page)
+      } else {
+        imageFilePath = await extractImageByBook(
+          item.archivePath || existBook.manga.filepath,
+          existBook.manga.type,
+          item.innerPath
+        )
+        if (imageFilePath) existBook.extractedCache.set(page, imageFilePath)
+      }
+      if (!imageFilePath || !fs.existsSync(imageFilePath)) {
+        return res.status(404).send('Image extraction failed')
+      }
     }
+
+    // sendFile 遇到路径里的 % / # 会错误 URL 解码，需要 rename 到安全路径
+    if (/[%#]/.test(imageFilePath)) {
+      const safeName = `safe_${mangaHash}_${page}${extname}`
+      const safePath = path.join(VIEWER_PATH, safeName)
+      try {
+        if (!fs.existsSync(safePath)) {
+          await fs.promises.copyFile(imageFilePath, safePath)
+        }
+        imageFilePath = safePath
+      } catch (e) {
+        console.error('[LAN] safe-path rename failed:', e.message)
+      }
+    }
+
+    // 直接发送文件
+    res.sendFile(imageFilePath, {
+      maxAge: '1d',
+      dotfiles: 'deny',
+      headers: { 'Cache-Control': 'public, max-age=86400' }
+    })
   } catch (err) {
-    console.error(err)
-    res.status(500).send('Error processing file')
+    console.error('[LAN] page error:', err)
+    res.status(500).send('Error processing image')
   }
 })
 
@@ -2737,13 +2779,24 @@ LANBrowsing.get('/api/progress/:type/:id', async (req, res) => {
         lastReadAt: novel.lastReadAt
       })
     } else if (type === 'manga') {
-      let manga = await Manga.findByPk(id)
-      if (!manga) manga = await Manga.findOne({ where: { hash: id } })
-      if (!manga) return res.json(null)
-      const progress = manga.readProgress ? JSON.parse(manga.readProgress) : null
+      // 用 raw SQL 查询，因为 readProgress/lastReadAt 通过 ALTER TABLE 添加，不在 Sequelize 模型里
+      let rows = await Manga.sequelize.query(
+        'SELECT readProgress, lastReadAt FROM Mangas WHERE id = ? LIMIT 1',
+        { replacements: [id], type: Manga.sequelize.QueryTypes.SELECT }
+      )
+      if (rows.length === 0) {
+        // fallback: 按 hash 查找（LANraragi 客户端用 arcid=hash）
+        rows = await Manga.sequelize.query(
+          'SELECT readProgress, lastReadAt FROM Mangas WHERE hash = ? LIMIT 1',
+          { replacements: [id], type: Manga.sequelize.QueryTypes.SELECT }
+        )
+      }
+      if (rows.length === 0) return res.json(null)
+      const row = rows[0]
+      const progress = row.readProgress ? JSON.parse(row.readProgress) : null
       return res.json({
         progress,
-        lastReadAt: manga.lastReadAt
+        lastReadAt: row.lastReadAt
       })
     }
     res.status(400).json({ error: 'Invalid type' })
@@ -2770,16 +2823,18 @@ LANBrowsing.post('/api/progress/:type/:id', async (req, res) => {
       }, { where: { id } })
       res.json({ success: true })
     } else if (type === 'manga') {
-      // 先按 id（主键）查找，找不到再按 hash 查找（向后兼容 LANraragi 客户端）
-      let [rowsAffected] = await Manga.update({
-        readProgress: JSON.stringify(progress),
-        lastReadAt: Date.now()
-      }, { where: { id } })
-      if (rowsAffected === 0) {
-        await Manga.update({
-          readProgress: JSON.stringify(progress),
-          lastReadAt: Date.now()
-        }, { where: { hash: id } })
+      // 用 raw SQL 更新，因为 readProgress/lastReadAt 不在 Sequelize 模型里
+      const now = Date.now()
+      let [result] = await Manga.sequelize.query(
+        'UPDATE Mangas SET readProgress = ?, lastReadAt = ? WHERE id = ?',
+        { replacements: [JSON.stringify(progress), now, id] }
+      )
+      // fallback: 如果按 id 没匹配到，按 hash 更新（LANraragi 客户端用 arcid）
+      if (result.changes === 0) {
+        await Manga.sequelize.query(
+          'UPDATE Mangas SET readProgress = ?, lastReadAt = ? WHERE hash = ?',
+          { replacements: [JSON.stringify(progress), now, id] }
+        )
       }
       res.json({ success: true })
     } else {
