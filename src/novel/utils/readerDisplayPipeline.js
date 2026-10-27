@@ -2,13 +2,13 @@ const LINE_BREAK_RE = /\r\n|\r|\n/g
 
 const CN_NUM = '零〇一二三四五六七八九十百千万两壹贰叁肆伍陆柒捌玖拾佰仟'
 
-const CHAPTER_MATCH_BUILTIN_MAIN_PATTERN = `^(第\\s*([0-9０-９${CN_NUM}]+)\\s*[章回节卷部篇折集])(?:\\s*[、.．])?\\s*(.+)?$`
-const CHAPTER_MATCH_BUILTIN_ALT_PATTERN = `^([卷集部篇折]\\s*[0-9０-９${CN_NUM}]+)(?:\\s*[、.．])?\\s*(.+)?$`
+const CHAPTER_MATCH_BUILTIN_MAIN_PATTERN = `^\\s*(第\\s*([0-9０-９${CN_NUM}]+)\\s*[章回节卷部篇折集])(?:\\s*[、.．])?\\s*(.+)?$`
+const CHAPTER_MATCH_BUILTIN_ALT_PATTERN = `^\\s*([卷集部篇折]\\s*[0-9０-９${CN_NUM}]+)(?:\\s*[、.．])?\\s*(.+)?$`
 
 const RE_MAIN = new RegExp(CHAPTER_MATCH_BUILTIN_MAIN_PATTERN)
 const RE_ALT = new RegExp(CHAPTER_MATCH_BUILTIN_ALT_PATTERN)
-const RE_EN = /^(chapter|section|part|volume|book)\s+([\dIVXLCDMivxlcdm]+)(?:\s+(.+))?$/i
-const RE_SPECIAL = /^(楔子|序章|序幕|引子|终章|番外(?:篇)?\s*\d*|后记|尾声|外传|幕间)(?:\s+(.+))?$/
+const RE_EN = /^\s*(chapter|section|part|volume|book)\s+([\dIVXLCDMivxlcdm]+)(?:\s+(.+))?$/i
+const RE_SPECIAL = /^\s*(楔子|序章|序幕|引子|终章|番外(?:篇)?\s*\d*|后记|尾声|外传|幕间)(?:\s+(.+))?$/
 
 function matchToTitle(match) {
   const g1 = (match[1] ?? '').trim()

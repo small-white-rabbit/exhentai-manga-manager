@@ -2471,6 +2471,7 @@ const getLANArchiveTags = (manga) => {
 }
 
 const mangaToLANraragiArchive = (manga) => ({
+  id: manga.id,
   arcid: manga.hash,
   extension: path.extname(manga.filepath || ''),
   filename: path.basename(manga.filepath || ''),
@@ -2736,7 +2737,8 @@ LANBrowsing.get('/api/progress/:type/:id', async (req, res) => {
         lastReadAt: novel.lastReadAt
       })
     } else if (type === 'manga') {
-      const manga = await Manga.findByPk(id)
+      let manga = await Manga.findByPk(id)
+      if (!manga) manga = await Manga.findOne({ where: { hash: id } })
       if (!manga) return res.json(null)
       const progress = manga.readProgress ? JSON.parse(manga.readProgress) : null
       return res.json({
@@ -2768,10 +2770,17 @@ LANBrowsing.post('/api/progress/:type/:id', async (req, res) => {
       }, { where: { id } })
       res.json({ success: true })
     } else if (type === 'manga') {
-      await Manga.update({
+      // 先按 id（主键）查找，找不到再按 hash 查找（向后兼容 LANraragi 客户端）
+      let [rowsAffected] = await Manga.update({
         readProgress: JSON.stringify(progress),
         lastReadAt: Date.now()
       }, { where: { id } })
+      if (rowsAffected === 0) {
+        await Manga.update({
+          readProgress: JSON.stringify(progress),
+          lastReadAt: Date.now()
+        }, { where: { hash: id } })
+      }
       res.json({ success: true })
     } else {
       res.status(400).json({ error: 'Invalid type' })

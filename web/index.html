@@ -2580,7 +2580,35 @@
       }
     }
 
-    function closeReader() {
+    async function closeReader() {
+      // 关闭前做最终保存，确保进度不丢失
+      if (currentBook) {
+        let finalPage = currentPage
+        if (readerMode === 'waterfall') {
+          const container = $('waterfall-view')
+          if (container) {
+            const imgs = container.querySelectorAll('img')
+            let currentImgIdx = 0
+            for (let i = 0; i < imgs.length; i++) {
+              const img = imgs[i]
+              const rect = img.getBoundingClientRect()
+              if (rect.top < window.innerHeight * 0.7) {
+                currentImgIdx = i + 1
+              }
+            }
+            if (currentImgIdx > 0) finalPage = currentImgIdx
+          }
+        }
+        // 清除待触发的 debounce 定时器，改为立即保存
+        if (savePositionTimer) {
+          clearTimeout(savePositionTimer)
+          savePositionTimer = null
+        }
+        await saveReadingPosition('manga', currentBook.id, {
+          page: finalPage,
+          scrollTop: readerMode === 'waterfall' ? ($('waterfall-view')?.scrollTop || 0) : 0
+        })
+      }
       $('reader-view').classList.add('hidden')
       $('library-view').classList.remove('hidden')
       if (waterfallObserver) {
@@ -2704,16 +2732,54 @@
       return div.innerHTML
     }
 
+    const _BRACKET_RES = [
+      /\[([^\]]+)\]/g,   // [作者]
+      /【([^】]+)】/g,   // 【作者】
+      /《([^》]+)》/g,   // 《书名》
+      /<([^>]+)>/g,      // <书名>
+    ]
+
     function extractBookTitle(title) {
       if (!title) return ''
       const str = String(title).trim()
-      const m1 = str.match(/《([^》]+)》/)
-      if (m1) return m1[1].trim()
-      const m2 = str.match(/<([^>]+)>/)
-      if (m2) return m2[1].trim()
-      const m3 = str.match(/【([^】]+)】/)
-      if (m3) return m3[1].trim()
-      return str
+
+      // 收集所有括号内的内容
+      const bracketContents = []
+      for (const re of _BRACKET_RES) {
+        re.lastIndex = 0
+        let m
+        while ((m = re.exec(str)) !== null) {
+          bracketContents.push(m[1].trim())
+        }
+      }
+
+      // 从字符串中移除所有括号标记（含括号和内容）
+      let cleaned = str
+      for (const re of _BRACKET_RES) {
+        re.lastIndex = 0
+        cleaned = cleaned.replace(re, '')
+      }
+      cleaned = cleaned.trim().replace(/^[\s\-_·、,，.。:：]+|[\s\-_·、,，.。:：]+$/g, '')
+
+      if (bracketContents.length === 0) {
+        return cleaned || str
+      }
+
+      // 找到括号内最长的内容（长度相等时优先取后面出现的，因为通常后面的是书名）
+      const longestBracket = bracketContents.reduce((a, b) => (b.length >= a.length ? b : a), '')
+
+      // 启发式：如果清理后文本不为空且占原始字符串的比例 >= 20%，
+      // 说明括号只是前缀/标记，清理后的文本才是真正的书名
+      const minCleanedRatio = 0.2
+      if (cleaned.length > 0 && cleaned.length / str.length >= minCleanedRatio) {
+        return cleaned
+      }
+
+      // 否则优先用最长的括号内容
+      if (longestBracket.length >= cleaned.length && longestBracket.length > 0) {
+        return longestBracket
+      }
+      return cleaned || longestBracket || str
     }
 
     function formatSize(bytes) {
